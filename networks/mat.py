@@ -899,7 +899,7 @@ class SynthesisNet(nn.Module):
         self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation=activation)
         self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2, activation=activation, drop_rate=drop_rate)
         style_dim = w_dim + nf(2) * 2 # ==> 1536
-        self.dec = Decoder(resolution_log2, activation, style_dim, img_channels)
+        self.dec = Decoder(resolution_log2, style_dim, img_channels)
 
 
     def forward(self, images_in, masks_in, ws, noise_mode='random'):
