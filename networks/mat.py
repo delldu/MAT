@@ -58,7 +58,7 @@ def window_reverse(windows, window_size, H, W):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
-
+# xxxx_debug
 @persistence.persistent_class
 class Conv2dLayerPartial(nn.Module):
     def __init__(self,
@@ -104,7 +104,7 @@ class Conv2dLayerPartial(nn.Module):
             x = self.conv(x)
             return x, None
 
-
+# xxxx_debug
 @persistence.persistent_class
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -164,7 +164,7 @@ class WindowAttention(nn.Module):
         x = self.proj(x)
         return x, mask_windows
 
-
+# xxxx_debug
 @persistence.persistent_class
 class SwinTransformerBlock(nn.Module):
     r""" Swin Transformer Block.
@@ -314,7 +314,7 @@ class SwinTransformerBlock(nn.Module):
 
         return x, mask
 
-
+# xxxx_debug
 @persistence.persistent_class
 class PatchMerging(nn.Module):
     def __init__(self, in_channels, out_channels, down=2):
@@ -351,7 +351,7 @@ class PatchMerging(nn.Module):
 
         return x, x_size, mask
 
-
+# xxxx_debug
 @persistence.persistent_class
 class PatchUpsampling(nn.Module):
     def __init__(self, in_channels, out_channels, up=2):
@@ -384,7 +384,7 @@ class PatchUpsampling(nn.Module):
         return x, x_size, mask
 
 
-
+# xxxx_debug
 @persistence.persistent_class
 class BasicLayer(nn.Module):
     """ A basic Swin Transformer layer for one stage.
@@ -585,7 +585,7 @@ class ToStyle(nn.Module):
         # tensor [x] size: [1, 1024], min: -0.370284, max: 0.784699, mean: 0.005559
         return x
 
-
+# xxxx_debug
 @persistence.persistent_class
 class DecBlockFirstV2(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
@@ -638,7 +638,7 @@ class DecBlockFirstV2(nn.Module):
         return x, img
 
 #----------------------------------------------------------------------------
-
+# xxxx_debug
 @persistence.persistent_class
 class DecBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):  # res = 4, ..., resolution_log2
@@ -676,7 +676,7 @@ class DecBlock(nn.Module):
 
         return x, img
 
-
+# xxxx_debug
 @persistence.persistent_class
 class Decoder(nn.Module):
     def __init__(self, 
@@ -806,7 +806,7 @@ class FirstStage(nn.Module):
         skips.append(x)
         for i, block in enumerate(self.enc_conv):  # input size to 64
             x, mask = block(x, mask)
-            if i != len(self.enc_conv) - 1:
+            if i != len(self.enc_conv) - 1: # # xxxx_debug
                 skips.append(x)
 
         x_size = x.size()[-2:]
@@ -814,7 +814,7 @@ class FirstStage(nn.Module):
         mask = feature2token(mask)
         mid = len(self.tran) // 2 # len(self.tran) == 5 ==> mid === 2
         for i, block in enumerate(self.tran):  # 64 to 16
-            if i < mid:
+            if i < mid: # # xxxx_debug
                 x, x_size, mask = block(x, x_size, mask)
                 skips.append(x)
             elif i > mid:

@@ -20,7 +20,7 @@ def normalize_2nd_moment(x, dim=1, eps=1e-8):
     return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
 
 #----------------------------------------------------------------------------
-
+# xxxx_debug
 @persistence.persistent_class
 class FullyConnectedLayer(nn.Module):
     def __init__(self,
@@ -100,7 +100,7 @@ class Conv2dLayer(nn.Module):
         return out
 
 #----------------------------------------------------------------------------
-
+# xxxx_debug
 @persistence.persistent_class
 class ModulatedConv2d(nn.Module):
     def __init__(self,
@@ -149,7 +149,7 @@ class ModulatedConv2d(nn.Module):
         return out
 
 #----------------------------------------------------------------------------
-
+# xxxx_debug
 @persistence.persistent_class
 class StyleConv(torch.nn.Module):
     def __init__(self,
@@ -209,7 +209,7 @@ class StyleConv(torch.nn.Module):
         return out
 
 #----------------------------------------------------------------------------
-
+# xxxx_debug
 @persistence.persistent_class
 class ToRGB(torch.nn.Module):
     def __init__(self,
@@ -262,7 +262,6 @@ class MappingNet(torch.nn.Module):
         w_dim = 512,                # Intermediate latent (W) dimensionality.
         num_ws = 12,                # Number of intermediate latents to output, None = do not broadcast.
         num_layers      = 8,        # Number of mapping layers.
-        embed_features  = 0,        # Label embedding dimensionality, None = same as w_dim.
         layer_features  = 512,      # Number of intermediate features in the mapping layers, None = same as w_dim.
     ):
         super().__init__()
@@ -271,7 +270,6 @@ class MappingNet(torch.nn.Module):
         # w_dim = 512
         # num_ws = 12
         # num_layers = 8
-        # embed_features = 0
         # layer_features = 512
 
         self.z_dim = z_dim
@@ -279,13 +277,7 @@ class MappingNet(torch.nn.Module):
         self.num_ws = num_ws
         self.num_layers = num_layers
 
-        if embed_features is None:
-            embed_features = w_dim
-        if c_dim == 0:
-            embed_features = 0
-        # ==> embed_features === 0
-
-        features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
+        features_list = [z_dim] + [layer_features] * (num_layers - 1) + [w_dim]
         # features_list --- [512, 512, 512, 512, 512, 512, 512, 512, 512]
 
         for idx in range(num_layers): # num_layers -- 8
