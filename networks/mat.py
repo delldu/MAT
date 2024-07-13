@@ -66,7 +66,6 @@ class Conv2dLayerPartial(nn.Module):
                  out_channels,                   # Number of output channels.
                  kernel_size,                    # Width and height of the convolution kernel.
                  bias            = True,         # Apply additive bias before the activation function?
-                 activation      = 'linear',     # Activation function: 'relu', 'lrelu', etc.
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
@@ -75,11 +74,8 @@ class Conv2dLayerPartial(nn.Module):
         # in_channels = 4
         # out_channels = 180
         # kernel_size = 3
-        # activation = 'lrelu'
-        if activation != "lrelu":
-            pdb.set_trace()
 
-        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, activation, up, down, resample_filter)
+        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, up, down, resample_filter)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
         self.slide_winsize = kernel_size ** 2
@@ -326,7 +322,6 @@ class PatchMerging(nn.Module):
         self.conv = Conv2dLayerPartial(in_channels=in_channels,
                                        out_channels=out_channels,
                                        kernel_size=3,
-                                       activation='lrelu',
                                        down=down,
                                        )
         self.down = down
@@ -364,7 +359,6 @@ class PatchUpsampling(nn.Module):
         self.conv = Conv2dLayerPartial(in_channels=in_channels,
                                        out_channels=out_channels,
                                        kernel_size=3,
-                                       activation='lrelu',
                                        up=up,
                                        )
         self.up = up
@@ -437,7 +431,7 @@ class BasicLayer(nn.Module):
                                  norm_layer=norm_layer)
             for i in range(depth)]) # depth === 2
 
-        self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3, activation='lrelu')
+        self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
 
     def forward(self, x, x_size, mask=None):
         # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
@@ -478,12 +472,10 @@ class EncFromRGB(nn.Module):
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                 out_channels=out_channels,
                                 kernel_size=1,
-                                activation=activation,
                                 )
         self.conv1 = Conv2dLayer(in_channels=out_channels,
                                 out_channels=out_channels,
                                 kernel_size=3,
-                                activation=activation,
                                 )
 
     def forward(self, x):
@@ -500,13 +492,11 @@ class ConvBlockDown(nn.Module):
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                  out_channels=out_channels,
                                  kernel_size=3,
-                                 activation=activation,
                                  down=2,
                                  )
         self.conv1 = Conv2dLayer(in_channels=out_channels,
                                  out_channels=out_channels,
                                  kernel_size=3,
-                                 activation=activation,
                                  )
 
     def forward(self, x):
@@ -582,9 +572,9 @@ class ToStyle(nn.Module):
         # activation = 'lrelu'
         # drop_rate = 0.5
         self.conv = nn.Sequential(
-                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, activation=activation, down=2),
-                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, activation=activation, down=2),
-                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, activation=activation, down=2),
+                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
+                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
+                Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
                 )
 
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -604,7 +594,7 @@ class ToStyle(nn.Module):
 
 @persistence.persistent_class
 class DecBlockFirstV2(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
+    def __init__(self, res, in_channels, out_channels, activation, style_dim, img_channels):
         super().__init__()
         # res = 4
         # in_channels = 512
@@ -618,16 +608,15 @@ class DecBlockFirstV2(nn.Module):
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                 out_channels=in_channels,
                                 kernel_size=3,
-                                activation=activation,
                                 )
         self.conv1 = StyleConv(in_channels=in_channels,
                               out_channels=out_channels,
                               style_dim=style_dim,
                               resolution=2**res,
                               kernel_size=3,
-                              use_noise=use_noise,
+                              use_noise=True,
                               activation=activation,
-                              demodulate=demodulate,
+                              demodulate=True,
                               )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -666,7 +655,7 @@ class DecBlockFirstV2(nn.Module):
 
 @persistence.persistent_class
 class DecBlock(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):  # res = 4, ..., resolution_log2
+    def __init__(self, res, in_channels, out_channels, activation, style_dim, img_channels):  # res = 4, ..., resolution_log2
         super().__init__()
         self.res = res
 
@@ -676,18 +665,18 @@ class DecBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                up=2,
-                               use_noise=use_noise,
+                               use_noise=True,
                                activation=activation,
-                               demodulate=demodulate,
+                               demodulate=True,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
                                resolution=2**res,
                                kernel_size=3,
-                               use_noise=use_noise,
+                               use_noise=True,
                                activation=activation,
-                               demodulate=demodulate,
+                               demodulate=True,
                                )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -714,15 +703,15 @@ class Decoder(nn.Module):
         res_log2=9, 
         activation='lrelu', 
         style_dim=1536, 
-        use_noise=True, 
-        demodulate=True, 
+        # use_noise=True, 
+        # demodulate=True, 
         img_channels=3,
     ):
         super().__init__()
-        self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), activation, style_dim, use_noise, demodulate, img_channels)
+        self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), activation, style_dim, img_channels)
         for res in range(5, res_log2 + 1):
             setattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res),
-                    DecBlock(res, nf(res - 1), nf(res), activation, style_dim, use_noise, demodulate, img_channels))
+                    DecBlock(res, nf(res - 1), nf(res), activation, style_dim, img_channels))
         self.res_log2 = res_log2 # 9
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
@@ -738,7 +727,7 @@ class Decoder(nn.Module):
 
 @persistence.persistent_class
 class DecStyleBlock(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
+    def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
         super().__init__()
         self.res = res
 
@@ -748,18 +737,18 @@ class DecStyleBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                up=2,
-                               use_noise=use_noise,
-                               activation=activation,
-                               demodulate=demodulate,
+                               use_noise=False,
+                               activation='lrelu',
+                               demodulate=True,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
                                resolution=2**res,
                                kernel_size=3,
-                               use_noise=use_noise,
-                               activation=activation,
-                               demodulate=demodulate,
+                               use_noise=False,
+                               activation='lrelu',
+                               demodulate=True,
                                )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -784,19 +773,17 @@ class FirstStage(nn.Module):
         img_resolution=512, 
         dim=180, 
         w_dim=512, 
-        use_noise=False, 
-        demodulate=True, 
-        activation='lrelu',
+        # demodulate=True, 
     ):
         super().__init__()
         res = 64
 
-        self.conv_first = Conv2dLayerPartial(in_channels=img_channels+1, out_channels=dim, kernel_size=3, activation=activation)
+        self.conv_first = Conv2dLayerPartial(in_channels=img_channels+1, out_channels=dim, kernel_size=3)
         self.enc_conv = nn.ModuleList()
         down_time = int(np.log2(img_resolution // res)) # down_time === 3
         for i in range(down_time):  # from input size to 64
             self.enc_conv.append(
-                Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3, down=2, activation=activation)
+                Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3, down=2)
             )
 
         # from 64 -> 16 -> 64
@@ -825,18 +812,18 @@ class FirstStage(nn.Module):
         # global style
         down_conv = []
         for i in range(int(np.log2(16))):
-            down_conv.append(Conv2dLayer(in_channels=dim, out_channels=dim, kernel_size=3, down=2, activation=activation))
+            down_conv.append(Conv2dLayer(in_channels=dim, out_channels=dim, kernel_size=3, down=2))
         down_conv.append(nn.AdaptiveAvgPool2d((1, 1)))
         self.down_conv = nn.Sequential(*down_conv)
-        self.to_style = FullyConnectedLayer(in_features=dim, out_features=dim*2, activation=activation)
-        self.ws_style = FullyConnectedLayer(in_features=w_dim, out_features=dim, activation=activation)
-        self.to_square = FullyConnectedLayer(in_features=dim, out_features=16*16, activation=activation)
+        self.to_style = FullyConnectedLayer(in_features=dim, out_features=dim*2, activation='lrelu')
+        self.ws_style = FullyConnectedLayer(in_features=w_dim, out_features=dim, activation='lrelu')
+        self.to_square = FullyConnectedLayer(in_features=dim, out_features=16*16, activation='lrelu')
 
         style_dim = dim * 3
         self.dec_conv = nn.ModuleList()
         for i in range(down_time):  # down_time == 3, from 64 to input size
             res = res * 2
-            self.dec_conv.append(DecStyleBlock(res, dim, dim, activation, style_dim, use_noise, demodulate, img_channels))
+            self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
 
     def forward(self, images_in, masks_in, ws, noise_mode='random'):
         x = torch.cat([masks_in - 0.5, images_in * masks_in], dim=1)
@@ -914,14 +901,14 @@ class SynthesisNet(nn.Module):
         self.num_layers = resolution_log2 * 2 - 3 * 2 # ==> 12
 
         # first stage
-        self.first_stage = FirstStage(img_channels, img_resolution=img_resolution, w_dim=w_dim, use_noise=False, demodulate=demodulate)
+        self.first_stage = FirstStage(img_channels, img_resolution=img_resolution, w_dim=w_dim)
 
         # second stage
         self.enc = Encoder(resolution_log2, img_channels, activation, patch_size=5, channels=16)
         self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation=activation)
         self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2, activation=activation, drop_rate=drop_rate)
         style_dim = w_dim + nf(2) * 2 # ==> 1536
-        self.dec = Decoder(resolution_log2, activation, style_dim, use_noise, demodulate, img_channels)
+        self.dec = Decoder(resolution_log2, activation, style_dim, img_channels)
 
 
     def forward(self, images_in, masks_in, ws, noise_mode='random'):

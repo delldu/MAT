@@ -70,35 +70,25 @@ class Conv2dLayer(nn.Module):
                  out_channels,                   # Number of output channels.
                  kernel_size,                    # Width and height of the convolution kernel.
                  bias            = True,         # Apply additive bias before the activation function?
-                 activation      = 'linear',     # Activation function: 'relu', 'lrelu', etc.
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-                 trainable       = True,         # Update the weights of this layer during training?
                  ):
         super().__init__()
-        self.activation = activation
+
+        # self.activation = activation
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
             
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
-        self.act_gain = bias_act.activation_funcs[activation].def_gain
+        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
 
         weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size])
         bias = torch.zeros([out_channels]) if bias else None
-        if trainable:
-            self.weight = torch.nn.Parameter(weight)
-            self.bias = torch.nn.Parameter(bias) if bias is not None else None
-        else:
-            pdb.set_trace()
-
-            self.register_buffer('weight', weight)
-            if bias is not None:
-                self.register_buffer('bias', bias)
-            else:
-                self.bias = None
+        self.weight = torch.nn.Parameter(weight)
+        self.bias = torch.nn.Parameter(bias) if bias is not None else None
 
     def forward(self, x, gain=1):
         w = self.weight * self.weight_gain
@@ -107,7 +97,7 @@ class Conv2dLayer(nn.Module):
 
         act_gain = self.act_gain * gain
 
-        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
+        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
         return out
 
 #----------------------------------------------------------------------------
@@ -316,7 +306,7 @@ class MappingNet(torch.nn.Module):
         for idx in range(num_layers): # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier)
+            layer = FullyConnectedLayer(in_features, out_features, activation='lrelu', lr_multiplier=lr_multiplier)
             setattr(self, f'fc{idx}', layer)
 
         if num_ws is not None and w_avg_beta is not None: # True
@@ -347,7 +337,6 @@ class DisFromRGB(nn.Module):
         self.conv = Conv2dLayer(in_channels=in_channels,
                                 out_channels=out_channels,
                                 kernel_size=1,
-                                activation=activation,
                                 )
         pdb.set_trace()
 
@@ -363,13 +352,11 @@ class DisBlock(nn.Module):
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                  out_channels=in_channels,
                                  kernel_size=3,
-                                 activation=activation,
                                  )
         self.conv1 = Conv2dLayer(in_channels=in_channels,
                                  out_channels=out_channels,
                                  kernel_size=3,
                                  down=2,
-                                 activation=activation,
                                  )
         self.skip = Conv2dLayer(in_channels=in_channels,
                                 out_channels=out_channels,
