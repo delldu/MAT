@@ -39,11 +39,6 @@ class FullyConnectedLayer(nn.Module):
         self.weight_gain = lr_multiplier / np.sqrt(in_features)
         self.bias_gain = lr_multiplier
 
-        # if activation != 'lrelu':
-        #     pdb.set_trace()
-        # if bias != True:
-        #     pass # ==> pdb.set_trace()
-
     def forward(self, x):
         w = self.weight * self.weight_gain
         b = self.bias
@@ -79,7 +74,6 @@ class Conv2dLayer(nn.Module):
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-                 # conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
                  trainable       = True,         # Update the weights of this layer during training?
                  ):
         super().__init__()
@@ -87,9 +81,6 @@ class Conv2dLayer(nn.Module):
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-        # self.conv_clamp = conv_clamp
-        # if conv_clamp:
-        #     pdb.set_trace()
             
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
@@ -115,9 +106,6 @@ class Conv2dLayer(nn.Module):
                                             padding=self.padding)
 
         act_gain = self.act_gain * gain
-        # act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
-        # if act_clamp is not None:
-        #     pdb.set_trace()
 
         out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
         return out
@@ -135,7 +123,6 @@ class ModulatedConv2d(nn.Module):
                  up=1,                          # Integer upsampling factor.
                  down=1,                        # Integer downsampling factor.
                  resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
-                 # conv_clamp=None,               # Clamp the output to +-X, None = disable clamping.
                  ):
         super().__init__()
         self.demodulate = demodulate
@@ -148,7 +135,6 @@ class ModulatedConv2d(nn.Module):
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-        # self.conv_clamp = conv_clamp
 
         self.affine = FullyConnectedLayer(style_dim, in_channels, bias_init=1)
 
@@ -187,7 +173,6 @@ class StyleConv(torch.nn.Module):
         use_noise       = True,         # Enable noise input?
         activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        # conv_clamp      = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
         demodulate      = True,         # perform demodulation
     ):
         super().__init__()
@@ -199,8 +184,6 @@ class StyleConv(torch.nn.Module):
                                     demodulate=demodulate,
                                     up=up,
                                     resample_filter=resample_filter)
-        # ,
-        #                             conv_clamp=conv_clamp)
 
         self.use_noise = use_noise
         self.resolution = resolution
@@ -215,7 +198,6 @@ class StyleConv(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.activation = activation
         self.act_gain = bias_act.activation_funcs[activation].def_gain
-        # self.conv_clamp = conv_clamp
 
     def forward(self, x, style, noise_mode='random', gain=1):
         x = self.conv(x, style)
@@ -235,7 +217,6 @@ class StyleConv(torch.nn.Module):
             pass
 
         act_gain = self.act_gain * gain
-        # act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
         out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
 
         return out
@@ -250,7 +231,6 @@ class ToRGB(torch.nn.Module):
                  style_dim,
                  kernel_size=1,
                  resample_filter=[1,3,3,1],
-                 # conv_clamp=None,
                  demodulate=False):
         super().__init__()
 
@@ -260,12 +240,9 @@ class ToRGB(torch.nn.Module):
                                     style_dim=style_dim,
                                     demodulate=demodulate,
                                     resample_filter=resample_filter)
-        # ,
-        #                             conv_clamp=conv_clamp)
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
-        # self.conv_clamp = conv_clamp # None 
 
     def forward(self, x, style, skip=None):
         x = self.conv(x, style)
@@ -290,124 +267,6 @@ def get_style_code(a, b):
     return torch.cat([a, b], dim=1)
 
 #----------------------------------------------------------------------------
-
-# @persistence.persistent_class
-# class DecBlockFirst(nn.Module):
-#     def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
-#         super().__init__()
-#         self.fc = FullyConnectedLayer(in_features=in_channels*2,
-#                                       out_features=in_channels*4**2,
-#                                       activation=activation)
-#         self.conv = StyleConv(in_channels=in_channels,
-#                               out_channels=out_channels,
-#                               style_dim=style_dim,
-#                               resolution=4,
-#                               kernel_size=3,
-#                               use_noise=use_noise,
-#                               activation=activation,
-#                               demodulate=demodulate,
-#                               )
-#         self.toRGB = ToRGB(in_channels=out_channels,
-#                            out_channels=img_channels,
-#                            style_dim=style_dim,
-#                            kernel_size=1,
-#                            demodulate=False,
-#                            )
-
-#     def forward(self, x, ws, gs, E_features, noise_mode='random'):
-#         x = self.fc(x).view(x.shape[0], -1, 4, 4)
-#         x = x + E_features[2]
-#         style = get_style_code(ws[:, 0], gs)
-#         x = self.conv(x, style, noise_mode=noise_mode)
-#         style = get_style_code(ws[:, 1], gs)
-#         img = self.toRGB(x, style, skip=None)
-
-#         return x, img
-
-
-# @persistence.persistent_class
-# class DecBlockFirstV2(nn.Module):
-#     def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
-#         super().__init__()
-#         self.conv0 = Conv2dLayer(in_channels=in_channels,
-#                                 out_channels=in_channels,
-#                                 kernel_size=3,
-#                                 activation=activation,
-#                                 )
-#         self.conv1 = StyleConv(in_channels=in_channels,
-#                               out_channels=out_channels,
-#                               style_dim=style_dim,
-#                               resolution=4,
-#                               kernel_size=3,
-#                               use_noise=use_noise,
-#                               activation=activation,
-#                               demodulate=demodulate,
-#                               )
-#         self.toRGB = ToRGB(in_channels=out_channels,
-#                            out_channels=img_channels,
-#                            style_dim=style_dim,
-#                            kernel_size=1,
-#                            demodulate=False,
-#                            )
-
-#     def forward(self, x, ws, gs, E_features, noise_mode='random'):
-#         # x = self.fc(x).view(x.shape[0], -1, 4, 4)
-#         x = self.conv0(x)
-#         x = x + E_features[2]
-#         style = get_style_code(ws[:, 0], gs)
-#         x = self.conv1(x, style, noise_mode=noise_mode)
-#         style = get_style_code(ws[:, 1], gs)
-#         img = self.toRGB(x, style, skip=None)
-
-#         return x, img
-
-#----------------------------------------------------------------------------
-
-# @persistence.persistent_class
-# class DecBlock(nn.Module):
-#     def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):  # res = 2, ..., resolution_log2
-#         super().__init__()
-#         self.res = res
-
-#         self.conv0 = StyleConv(in_channels=in_channels,
-#                                out_channels=out_channels,
-#                                style_dim=style_dim,
-#                                resolution=2**res,
-#                                kernel_size=3,
-#                                up=2,
-#                                use_noise=use_noise,
-#                                activation=activation,
-#                                demodulate=demodulate,
-#                                )
-#         self.conv1 = StyleConv(in_channels=out_channels,
-#                                out_channels=out_channels,
-#                                style_dim=style_dim,
-#                                resolution=2**res,
-#                                kernel_size=3,
-#                                use_noise=use_noise,
-#                                activation=activation,
-#                                demodulate=demodulate,
-#                                )
-#         self.toRGB = ToRGB(in_channels=out_channels,
-#                            out_channels=img_channels,
-#                            style_dim=style_dim,
-#                            kernel_size=1,
-#                            demodulate=False,
-#                            )
-
-#     def forward(self, x, img, ws, gs, E_features, noise_mode='random'):
-#         style = get_style_code(ws[:, self.res * 2 - 5], gs)
-#         x = self.conv0(x, style, noise_mode=noise_mode)
-#         x = x + E_features[self.res]
-#         style = get_style_code(ws[:, self.res * 2 - 4], gs)
-#         x = self.conv1(x, style, noise_mode=noise_mode)
-#         style = get_style_code(ws[:, self.res * 2 - 3], gs)
-#         img = self.toRGB(x, style, skip=img)
-
-#         return x, img
-
-#----------------------------------------------------------------------------
-
 @persistence.persistent_class
 class MappingNet(torch.nn.Module):
     def __init__(self,
@@ -454,10 +313,6 @@ class MappingNet(torch.nn.Module):
         features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
         # features_list --- [512, 512, 512, 512, 512, 512, 512, 512, 512]
 
-        # if c_dim > 0:
-        #     pdb.set_trace()
-        #     self.embed = FullyConnectedLayer(c_dim, embed_features)
-
         for idx in range(num_layers): # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
@@ -468,31 +323,8 @@ class MappingNet(torch.nn.Module):
             self.register_buffer('w_avg', torch.zeros([w_dim]))
         # self.w_avg.size() -- [512]
 
-    # def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
     def forward(self, z):
         # tensor [z] size: [1, 512], min: -2.510093, max: 3.06608, mean: 0.064815
-        # pp c -- [], device='cuda:0', size=(1, 0)
-
-        # todos.debug.output_var("truncation_cutoff", truncation_cutoff)
-        # todos.debug.output_var("skip_w_avg_update", skip_w_avg_update)
-
-        # Embed, normalize, and concat inputs.
-        # x = None
-        # with torch.autograd.profiler.record_function('input'):
-        #     if self.z_dim > 0: # True
-        #         x = normalize_2nd_moment(z.to(torch.float32))
-        #     else:
-        #         pdb.set_trace()
-        #         pass
-
-        #     if self.c_dim > 0:
-        #         pdb.set_trace()
-
-        #         y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
-        #         x = torch.cat([x, y], dim=1) if x is not None else y
-        #     else:
-        #         pass
-        #         #pdb.set_trace()
 
         x = normalize_2nd_moment(z.to(torch.float32))
 
@@ -501,31 +333,7 @@ class MappingNet(torch.nn.Module):
             layer = getattr(self, f'fc{idx}')
             x = layer(x)
 
-        # Update moving average of W.
-        # if self.w_avg_beta is not None and self.training and not skip_w_avg_update:
-        #     pdb.set_trace()
-        #     with torch.autograd.profiler.record_function('update_w_avg'):
-        #         self.w_avg.copy_(x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta))
-
-        # Broadcast.
-        # if self.num_ws is not None: # True
-        #     # ==> pdb.set_trace() for self.num_ws === 12
-        #     with torch.autograd.profiler.record_function('broadcast'):
-        #         x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
-        # else:
-        #     pdb.set_trace()
         x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
-
-        # Apply truncation.
-        # if truncation_psi != 1:
-        #     pdb.set_trace()
-
-        #     with torch.autograd.profiler.record_function('truncate'):
-        #         assert self.w_avg_beta is not None
-        #         if self.num_ws is None or truncation_cutoff is None:
-        #             x = self.w_avg.lerp(x, truncation_psi)
-        #         else:
-        #             x[:, :truncation_cutoff] = self.w_avg.lerp(x[:, :truncation_cutoff], truncation_psi)
 
         # tensor [x] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
         return x
@@ -612,64 +420,3 @@ class MinibatchStdLayer(torch.nn.Module):
         pdb.set_trace()
         return x
 
-#----------------------------------------------------------------------------
-
-# @persistence.persistent_class
-# class Discriminator(torch.nn.Module):
-#     def __init__(self,
-#                  c_dim,                        # Conditioning label (C) dimensionality.
-#                  img_resolution,               # Input resolution.
-#                  img_channels,                 # Number of input color channels.
-#                  channel_base       = 32768,    # Overall multiplier for the number of channels.
-#                  channel_max        = 512,      # Maximum number of channels in any layer.
-#                  channel_decay      = 1,
-#                  cmap_dim           = None,     # Dimensionality of mapped conditioning label, None = default.
-#                  activation         = 'lrelu',
-#                  mbstd_group_size   = 4,        # Group size for the minibatch standard deviation layer, None = entire minibatch.
-#                  mbstd_num_channels = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
-#                  ):
-#         super().__init__()
-#         self.c_dim = c_dim
-#         self.img_resolution = img_resolution
-#         self.img_channels = img_channels
-
-#         resolution_log2 = int(np.log2(img_resolution))
-#         assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
-#         self.resolution_log2 = resolution_log2
-
-#         def nf(stage):
-#             return np.clip(int(channel_base / 2 ** (stage * channel_decay)), 1, channel_max)
-
-#         if cmap_dim == None:
-#             cmap_dim = nf(2)
-#         if c_dim == 0:
-#             cmap_dim = 0
-#         self.cmap_dim = cmap_dim
-
-#         if c_dim > 0:
-#             self.mapping = MappingNet(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None)
-
-#         Dis = [DisFromRGB(img_channels+1, nf(resolution_log2), activation)]
-#         for res in range(resolution_log2, 2, -1):
-#             Dis.append(DisBlock(nf(res), nf(res-1), activation))
-
-#         if mbstd_num_channels > 0:
-#             Dis.append(MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels))
-#         Dis.append(Conv2dLayer(nf(2) + mbstd_num_channels, nf(2), kernel_size=3, activation=activation))
-#         self.Dis = nn.Sequential(*Dis)
-
-#         self.fc0 = FullyConnectedLayer(nf(2)*4**2, nf(2), activation=activation)
-#         self.fc1 = FullyConnectedLayer(nf(2), 1 if cmap_dim == 0 else cmap_dim)
-
-#     def forward(self, images_in, masks_in, c):
-#         x = torch.cat([masks_in - 0.5, images_in], dim=1)
-#         x = self.Dis(x)
-#         x = self.fc1(self.fc0(x.flatten(start_dim=1)))
-
-#         if self.c_dim > 0:
-#             cmap = self.mapping(None, c)
-
-#         if self.cmap_dim > 0:
-#             x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
-
-#         return x

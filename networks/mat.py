@@ -6,7 +6,7 @@ sys.path.insert(0, '../')
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as checkpoint
+# import torch.utils.checkpoint as checkpoint
 from timm.models.layers import to_2tuple
 
 from torch_utils import misc
@@ -15,9 +15,6 @@ from networks.basic_module import (
     FullyConnectedLayer, 
     Conv2dLayer, 
     MappingNet, 
-    # MinibatchStdLayer, 
-    # DisFromRGB, 
-    # DisBlock, 
     StyleConv, 
     ToRGB, 
     get_style_code,
@@ -48,13 +45,6 @@ class Mlp(nn.Module):
 
 @misc.profiled_function
 def window_partition(x, window_size):
-    """
-    Args:
-        x: (B, H, W, C)
-        window_size (int): window size
-    Returns:
-        windows: (num_windows*B, window_size, window_size, C)
-    """
     B, H, W, C = x.shape
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
@@ -63,15 +53,6 @@ def window_partition(x, window_size):
 
 @misc.profiled_function
 def window_reverse(windows, window_size, H, W):
-    """
-    Args:
-        windows: (num_windows*B, window_size, window_size, C)
-        window_size (int): Window size
-        H (int): Height of image
-        W (int): Width of image
-    Returns:
-        x: (B, H, W, C)
-    """
     B = int(windows.shape[0] / (H * W / window_size / window_size))
     x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
@@ -89,8 +70,6 @@ class Conv2dLayerPartial(nn.Module):
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-                 # conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
-                 trainable       = True,         # Update the weights of this layer during training?
                  ):
         super().__init__()
         # in_channels = 4
@@ -100,8 +79,7 @@ class Conv2dLayerPartial(nn.Module):
         if activation != "lrelu":
             pdb.set_trace()
 
-        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, activation, up, down, resample_filter,
-                                trainable)
+        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, activation, up, down, resample_filter)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
         self.slide_winsize = kernel_size ** 2
@@ -134,13 +112,6 @@ class Conv2dLayerPartial(nn.Module):
 @persistence.persistent_class
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
-    It supports both of shifted and non-shifted window.
-    Args:
-        dim (int): Number of input channels.
-        window_size (tuple[int]): The height and width of the window.
-        num_heads (int): Number of attention heads.
-        attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
-        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
     def __init__(self, dim, window_size, num_heads, down_ratio=1, attn_drop=0., proj_drop=0.):
@@ -201,18 +172,6 @@ class WindowAttention(nn.Module):
 @persistence.persistent_class
 class SwinTransformerBlock(nn.Module):
     r""" Swin Transformer Block.
-    Args:
-        dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resulotion.
-        num_heads (int): Number of attention heads.
-        window_size (int): Window size.
-        shift_size (int): Shift size for SW-MSA.
-        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
-        drop (float, optional): Dropout rate. Default: 0.0
-        attn_drop (float, optional): Attention dropout rate. Default: 0.0
-        drop_path (float, optional): Stochastic depth rate. Default: 0.0
-        act_layer (nn.Module, optional): Activation layer. Default: nn.GELU
-        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
 
     def __init__(self, dim, input_resolution, num_heads, down_ratio=1, window_size=7, shift_size=0,
@@ -435,18 +394,6 @@ class PatchUpsampling(nn.Module):
 @persistence.persistent_class
 class BasicLayer(nn.Module):
     """ A basic Swin Transformer layer for one stage.
-    Args:
-        dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resolution.
-        depth (int): Number of blocks.
-        num_heads (int): Number of attention heads.
-        window_size (int): Local window size.
-        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
-        drop (float, optional): Dropout rate. Default: 0.0
-        attn_drop (float, optional): Attention dropout rate. Default: 0.0
-        drop_path (float | tuple[float], optional): Stochastic depth rate. Default: 0.0
-        norm_layer (nn.Module, optional): Normalization layer. Default: nn.LayerNorm
-        downsample (nn.Module | None, optional): Downsample layer at the end of the layer. Default: None
     """
 
     def __init__(self, dim, input_resolution, depth, num_heads, window_size, down_ratio=1,
@@ -523,21 +470,7 @@ class BasicLayer(nn.Module):
 
         return x, x_size, mask
 
-
-# @persistence.persistent_class
-# class ToToken(nn.Module):
-#     def __init__(self, in_channels=3, dim=128, kernel_size=5, stride=1):
-#         super().__init__()
-
-#         self.proj = Conv2dLayerPartial(in_channels=in_channels, out_channels=dim, kernel_size=kernel_size, activation='lrelu')
-
-#     def forward(self, x, mask):
-#         x, mask = self.proj(x, mask)
-
-#         return x, mask
-
 #----------------------------------------------------------------------------
-
 @persistence.persistent_class
 class EncFromRGB(nn.Module):
     def __init__(self, in_channels, out_channels, activation):  # res = 2, ..., resolution_log2
@@ -991,7 +924,7 @@ class SynthesisNet(nn.Module):
         self.dec = Decoder(resolution_log2, activation, style_dim, use_noise, demodulate, img_channels)
 
 
-    def forward(self, images_in, masks_in, ws, noise_mode='random', return_stg1=False):
+    def forward(self, images_in, masks_in, ws, noise_mode='random'):
         out_stg1 = self.first_stage(images_in, masks_in, ws, noise_mode=noise_mode)
 
         # encoder
@@ -1018,11 +951,7 @@ class SynthesisNet(nn.Module):
 
         # tensor [x] size: [1, 7, 512, 512], min: -1.121117, max: 1.248556, mean: -0.007224
         # tensor [img] size: [1, 3, 512, 512], min: -1.124015, max: 1.043849, mean: 0.075933
-        if not return_stg1: # True
-            return img
-        else:
-            pdb.set_trace()            
-            return img, out_stg1
+        return img
 
 
 @persistence.persistent_class
@@ -1033,8 +962,6 @@ class Generator(nn.Module):
                  w_dim,                  # Intermediate latent (W) dimensionality.
                  img_resolution,         # resolution of generated image
                  img_channels,           # Number of input color channels.
-                 # synthesis_kwargs = {},  # Arguments for SynthesisNetwork.
-                 # mapping_kwargs   = {},  # Arguments for MappingNetwork.
                  ):
         super().__init__()
         # z_dim = 512
@@ -1042,24 +969,10 @@ class Generator(nn.Module):
         # w_dim = 512
         # img_resolution = 512
         # img_channels = 3
-        # synthesis_kwargs = {}
-        # mapping_kwargs = {}
 
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.w_dim = w_dim
-        # self.img_resolution = img_resolution
-        # self.img_channels = img_channels
-
-        # self.synthesis = SynthesisNet(w_dim=w_dim,
-        #                               img_resolution=img_resolution,
-        #                               img_channels=img_channels,
-        #                               **synthesis_kwargs) # synthesis_kwargs -- {}
-        # self.mapping = MappingNet(z_dim=z_dim,
-        #                           c_dim=c_dim,
-        #                           w_dim=w_dim,
-        #                           num_ws=self.synthesis.num_layers,
-        #                           **mapping_kwargs) # mapping_kwargs -- {}
 
         self.synthesis = SynthesisNet(w_dim=w_dim,
                                       img_resolution=img_resolution,
@@ -1069,14 +982,7 @@ class Generator(nn.Module):
                                   w_dim=w_dim,
                                   num_ws=self.synthesis.num_layers)
 
-    def forward(self, images_in, masks_in, z,
-                # c, 
-                # truncation_psi=1, 
-                # truncation_cutoff=None, 
-                # skip_w_avg_update=False,
-                noise_mode='random', 
-                # return_stg1=False,
-            ):
+    def forward(self, images_in, masks_in, z, noise_mode='random'):
         todos.debug.output_var("images_in", images_in)
         todos.debug.output_var("masks_in", masks_in)
         todos.debug.output_var("z", z)
@@ -1092,112 +998,5 @@ class Generator(nn.Module):
         # todos.debug.output_var("ws", ws)
         # tensor [ws] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
 
-        # if not return_stg1: # True
-        #     img = self.synthesis(images_in, masks_in, ws, noise_mode=noise_mode)
-        #     return img
-        # else:
-        #     pdb.set_trace()            
-
-        #     img, out_stg1 = self.synthesis(images_in, masks_in, ws, noise_mode=noise_mode, return_stg1=True)
-        #     return img, out_stg1
-
         img = self.synthesis(images_in, masks_in, ws, noise_mode=noise_mode)
         return img
-
-
-# @persistence.persistent_class
-# class Discriminator(torch.nn.Module):
-#     def __init__(self,
-#                  c_dim,                        # Conditioning label (C) dimensionality.
-#                  img_resolution,               # Input resolution.
-#                  img_channels,                 # Number of input color channels.
-#                  channel_base       = 32768,    # Overall multiplier for the number of channels.
-#                  channel_max        = 512,      # Maximum number of channels in any layer.
-#                  channel_decay      = 1,
-#                  cmap_dim           = None,     # Dimensionality of mapped conditioning label, None = default.
-#                  activation         = 'lrelu',
-#                  mbstd_group_size   = 4,        # Group size for the minibatch standard deviation layer, None = entire minibatch.
-#                  mbstd_num_channels = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
-#                  ):
-#         super().__init__()
-#         self.c_dim = c_dim
-#         # self.img_resolution = img_resolution
-#         self.img_channels = img_channels
-
-#         resolution_log2 = int(np.log2(img_resolution))
-#         assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
-#         self.resolution_log2 = resolution_log2
-
-#         if cmap_dim == None:
-#             cmap_dim = nf(2)
-#         if c_dim == 0:
-#             cmap_dim = 0
-#         self.cmap_dim = cmap_dim
-
-#         if c_dim > 0:
-#             self.mapping = MappingNet(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None)
-
-#         Dis = [DisFromRGB(img_channels+1, nf(resolution_log2), activation)]
-#         for res in range(resolution_log2, 2, -1):
-#             Dis.append(DisBlock(nf(res), nf(res-1), activation))
-
-#         if mbstd_num_channels > 0:
-#             Dis.append(MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels))
-#         Dis.append(Conv2dLayer(nf(2) + mbstd_num_channels, nf(2), kernel_size=3, activation=activation))
-#         self.Dis = nn.Sequential(*Dis)
-
-#         self.fc0 = FullyConnectedLayer(nf(2)*4**2, nf(2), activation=activation)
-#         self.fc1 = FullyConnectedLayer(nf(2), 1 if cmap_dim == 0 else cmap_dim)
-
-#         # for 64x64
-#         Dis_stg1 = [DisFromRGB(img_channels+1, nf(resolution_log2) // 2, activation)]
-#         for res in range(resolution_log2, 2, -1):
-#             Dis_stg1.append(DisBlock(nf(res) // 2, nf(res - 1) // 2, activation))
-
-#         if mbstd_num_channels > 0:
-#             Dis_stg1.append(MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels))
-#         Dis_stg1.append(Conv2dLayer(nf(2) // 2 + mbstd_num_channels, nf(2) // 2, kernel_size=3, activation=activation))
-#         self.Dis_stg1 = nn.Sequential(*Dis_stg1)
-
-#         self.fc0_stg1 = FullyConnectedLayer(nf(2) // 2 * 4 ** 2, nf(2) // 2, activation=activation)
-#         self.fc1_stg1 = FullyConnectedLayer(nf(2) // 2, 1 if cmap_dim == 0 else cmap_dim)
-
-#     def forward(self, images_in, masks_in, images_stg1, c):
-#         x = self.Dis(torch.cat([masks_in - 0.5, images_in], dim=1))
-#         x = self.fc1(self.fc0(x.flatten(start_dim=1)))
-
-#         x_stg1 = self.Dis_stg1(torch.cat([masks_in - 0.5, images_stg1], dim=1))
-#         x_stg1 = self.fc1_stg1(self.fc0_stg1(x_stg1.flatten(start_dim=1)))
-
-#         if self.c_dim > 0:
-#             cmap = self.mapping(None, c)
-
-#         if self.cmap_dim > 0:
-#             x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
-#             x_stg1 = (x_stg1 * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
-
-#         return x, x_stg1
-
-
-# if __name__ == '__main__':
-#     device = torch.device('cuda:0')
-#     batch = 1
-#     res = 512
-#     G = Generator(z_dim=512, c_dim=0, w_dim=512, img_resolution=512, img_channels=3).to(device)
-#     D = Discriminator(c_dim=0, img_resolution=res, img_channels=3).to(device)
-#     img = torch.randn(batch, 3, res, res).to(device)
-#     mask = torch.randn(batch, 1, res, res).to(device)
-#     z = torch.randn(batch, 512).to(device)
-#     G.eval()
-
-
-#     def count(block):
-#         return sum(p.numel() for p in block.parameters()) / 10 ** 6
-#     print('Generator', count(G))
-#     print('discriminator', count(D))
-
-#     with torch.no_grad():
-#         img, img_stg1 = G(img, mask, z, None, return_stg1=True)
-#     print('output of G:', img.shape, img_stg1.shape)
-#     score, score_stg1 = D(img, mask, img_stg1, None)
-#     print('output of D:', score.shape, score_stg1.shape)
