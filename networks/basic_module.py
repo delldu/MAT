@@ -114,7 +114,7 @@ class ModulatedConv2d(nn.Module):
                  resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
-        self.demodulate = demodulate
+        self.demodulate = demodulate # True | False
 
         self.weight = torch.nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
         self.out_channels = out_channels
@@ -132,7 +132,7 @@ class ModulatedConv2d(nn.Module):
         style = self.affine(style).view(batch, 1, in_channels, 1, 1)
         weight = self.weight * self.weight_gain * style
 
-        if self.demodulate:
+        if self.demodulate: # True | False
             # ==> pdb.set_trace()
             decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
             weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
@@ -191,7 +191,7 @@ class StyleConv(torch.nn.Module):
 
         assert noise_mode in ['random', 'const', 'none']
 
-        if self.use_noise:
+        if self.use_noise: # True | False
             if noise_mode == 'random':
                 xh, xw = x.size()[-2:]
                 noise = torch.randn([x.shape[0], 1, xh, xw], device=x.device) \
@@ -218,14 +218,14 @@ class ToRGB(torch.nn.Module):
                  style_dim,
                  kernel_size=1,
                  resample_filter=[1,3,3,1],
-                 demodulate=False):
+                ):
         super().__init__()
 
         self.conv = ModulatedConv2d(in_channels=in_channels,
                                     out_channels=out_channels,
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
-                                    demodulate=demodulate,
+                                    demodulate=False,
                                     resample_filter=resample_filter)
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
@@ -264,8 +264,6 @@ class MappingNet(torch.nn.Module):
         num_layers      = 8,        # Number of mapping layers.
         embed_features  = 0,        # Label embedding dimensionality, None = same as w_dim.
         layer_features  = 512,      # Number of intermediate features in the mapping layers, None = same as w_dim.
-        lr_multiplier   = 0.01,     # Learning rate multiplier for the mapping layers.
-        w_avg_beta      = 0.995,    # Decay for tracking the moving average of W during training, None = do not track.
     ):
         super().__init__()
         # z_dim = 512
@@ -275,16 +273,11 @@ class MappingNet(torch.nn.Module):
         # num_layers = 8
         # embed_features = 0
         # layer_features = 512
-        # lr_multiplier = 0.01
-        # w_avg_beta = 0.995
-
 
         self.z_dim = z_dim
         self.c_dim = c_dim
-        # self.w_dim = w_dim
         self.num_ws = num_ws
         self.num_layers = num_layers
-        self.w_avg_beta = w_avg_beta
 
         if embed_features is None:
             embed_features = w_dim
@@ -292,20 +285,16 @@ class MappingNet(torch.nn.Module):
             embed_features = 0
         # ==> embed_features === 0
 
-        if layer_features is None: # False
-            pdb.set_trace()
-            layer_features = w_dim
         features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
         # features_list --- [512, 512, 512, 512, 512, 512, 512, 512, 512]
 
         for idx in range(num_layers): # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = FullyConnectedLayer(in_features, out_features, activation='lrelu', lr_multiplier=lr_multiplier)
+            layer = FullyConnectedLayer(in_features, out_features, activation='lrelu', lr_multiplier=0.01)
             setattr(self, f'fc{idx}', layer)
 
-        if num_ws is not None and w_avg_beta is not None: # True
-            self.register_buffer('w_avg', torch.zeros([w_dim]))
+        self.register_buffer('w_avg', torch.zeros([w_dim]))
         # self.w_avg.size() -- [512]
 
     def forward(self, z):

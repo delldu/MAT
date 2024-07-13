@@ -561,14 +561,10 @@ class ToStyle(nn.Module):
     def __init__(self, 
         in_channels = 512, 
         out_channels = 1024, 
-        activation = 'lrelu', 
-        drop_rate = 0.5,
     ):
         super().__init__()
         # in_channels = 512
         # out_channels = 1024
-        # activation = 'lrelu'
-        # drop_rate = 0.5
         self.conv = nn.Sequential(
                 Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
                 Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
@@ -578,7 +574,7 @@ class ToStyle(nn.Module):
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = FullyConnectedLayer(in_features=in_channels,
                                       out_features=out_channels,
-                                      activation=activation)
+                                      activation='lrelu')
         # pdb.set_trace()
     def forward(self, x):
         # tensor [x] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
@@ -615,9 +611,7 @@ class DecBlockFirstV2(nn.Module):
                            out_channels=img_channels,
                            style_dim=style_dim,
                            kernel_size=1,
-                           demodulate=False,
                            )
-        # pdb.set_trace()
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
         # tensor [x] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
@@ -639,7 +633,6 @@ class DecBlockFirstV2(nn.Module):
         style = get_style_code(ws[:, 1], gs)
         img = self.toRGB(x, style, skip=None)
 
-        # pdb.set_trace()
         # tensor [x] size: [1, 512, 16, 16], min: -14.745468, max: 52.303444, mean: -0.170848
         # tensor [img] size: [1, 3, 16, 16], min: -0.003557, max: 0.002705, mean: -0.000736
         return x, img
@@ -651,7 +644,6 @@ class DecBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):  # res = 4, ..., resolution_log2
         super().__init__()
         self.res = res
-
         self.conv0 = StyleConv(in_channels=in_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
@@ -671,7 +663,6 @@ class DecBlock(nn.Module):
                            out_channels=img_channels,
                            style_dim=style_dim,
                            kernel_size=1,
-                           demodulate=False,
                            )
 
     def forward(self, x, img, ws, gs, e_features, noise_mode='random'):
@@ -737,7 +728,6 @@ class DecStyleBlock(nn.Module):
                            out_channels=img_channels,
                            style_dim=style_dim,
                            kernel_size=1,
-                           demodulate=False,
                            )
 
     def forward(self, x, img, style, skip, noise_mode='random'):
@@ -862,8 +852,6 @@ class SynthesisNet(nn.Module):
                  channel_base   = 32768,    # Overall multiplier for the number of channels.
                  channel_decay  = 1.0,
                  channel_max    = 512,      # Maximum number of channels in any layer.
-                 activation     = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
-                 drop_rate      = 0.5,
                  ):
         super().__init__()
         # w_dim = 512
@@ -872,8 +860,6 @@ class SynthesisNet(nn.Module):
         # channel_base = 32768
         # channel_decay = 1.0
         # channel_max = 512
-        # activation = 'lrelu'
-        # drop_rate = 0.5
         resolution_log2 = int(np.log2(img_resolution)) # ==> 9
         assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
 
@@ -884,8 +870,8 @@ class SynthesisNet(nn.Module):
 
         # second stage
         self.enc = Encoder(resolution_log2, img_channels, patch_size=5, channels=16)
-        self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation=activation)
-        self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2, activation=activation, drop_rate=drop_rate)
+        self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation='lrelu')
+        self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2)
         style_dim = w_dim + nf(2) * 2 # ==> 1536
         self.dec = Decoder(resolution_log2, style_dim, img_channels)
 
