@@ -594,15 +594,12 @@ class ToStyle(nn.Module):
 
 @persistence.persistent_class
 class DecBlockFirstV2(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, img_channels):
+    def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
         super().__init__()
         # res = 4
         # in_channels = 512
         # out_channels = 512
-        # activation = 'lrelu'
         # style_dim = 1536
-        # use_noise = True
-        # demodulate = True
         # img_channels = 3
         self.res = res
         self.conv0 = Conv2dLayer(in_channels=in_channels,
@@ -615,7 +612,7 @@ class DecBlockFirstV2(nn.Module):
                               resolution=2**res,
                               kernel_size=3,
                               use_noise=True,
-                              activation=activation,
+                              activation='lrelu',
                               demodulate=True,
                               )
         self.toRGB = ToRGB(in_channels=out_channels,
@@ -655,7 +652,7 @@ class DecBlockFirstV2(nn.Module):
 
 @persistence.persistent_class
 class DecBlock(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, img_channels):  # res = 4, ..., resolution_log2
+    def __init__(self, res, in_channels, out_channels, style_dim, img_channels):  # res = 4, ..., resolution_log2
         super().__init__()
         self.res = res
 
@@ -666,7 +663,7 @@ class DecBlock(nn.Module):
                                kernel_size=3,
                                up=2,
                                use_noise=True,
-                               activation=activation,
+                               activation='lrelu',
                                demodulate=True,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
@@ -675,7 +672,7 @@ class DecBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                use_noise=True,
-                               activation=activation,
+                               activation='lrelu',
                                demodulate=True,
                                )
         self.toRGB = ToRGB(in_channels=out_channels,
@@ -701,17 +698,15 @@ class DecBlock(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, 
         res_log2=9, 
-        activation='lrelu', 
+        # activation='lrelu', 
         style_dim=1536, 
-        # use_noise=True, 
-        # demodulate=True, 
         img_channels=3,
     ):
         super().__init__()
-        self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), activation, style_dim, img_channels)
+        self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), style_dim, img_channels)
         for res in range(5, res_log2 + 1):
             setattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res),
-                    DecBlock(res, nf(res - 1), nf(res), activation, style_dim, img_channels))
+                    DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels))
         self.res_log2 = res_log2 # 9
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
@@ -881,8 +876,6 @@ class SynthesisNet(nn.Module):
                  channel_max    = 512,      # Maximum number of channels in any layer.
                  activation     = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
                  drop_rate      = 0.5,
-                 use_noise      = True,
-                 demodulate     = True,
                  ):
         super().__init__()
         # w_dim = 512
@@ -893,8 +886,6 @@ class SynthesisNet(nn.Module):
         # channel_max = 512
         # activation = 'lrelu'
         # drop_rate = 0.5
-        # use_noise = True
-        # demodulate = True
         resolution_log2 = int(np.log2(img_resolution)) # ==> 9
         assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
 
