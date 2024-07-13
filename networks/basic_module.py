@@ -76,7 +76,6 @@ class Conv2dLayer(nn.Module):
                  ):
         super().__init__()
 
-        # self.activation = activation
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
@@ -160,10 +159,8 @@ class StyleConv(torch.nn.Module):
         resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 1,            # Integer upsampling factor.
-        use_noise       = True,         # Enable noise input?
-        activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
+        use_noise       = True,         # Enable noise input? True or False
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        demodulate      = True,         # perform demodulation
     ):
         super().__init__()
 
@@ -171,13 +168,13 @@ class StyleConv(torch.nn.Module):
                                     out_channels=out_channels,
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
-                                    demodulate=demodulate,
+                                    demodulate=True,
                                     up=up,
                                     resample_filter=resample_filter)
 
         self.use_noise = use_noise
         self.resolution = resolution
-        if use_noise:
+        if use_noise: # True | False
             # ==> pdb.set_trace()
             self.register_buffer('noise_const', torch.randn([resolution, resolution]))
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
@@ -186,8 +183,8 @@ class StyleConv(torch.nn.Module):
             pass
 
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
-        self.activation = activation
-        self.act_gain = bias_act.activation_funcs[activation].def_gain
+        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
+
 
     def forward(self, x, style, noise_mode='random', gain=1):
         x = self.conv(x, style)
@@ -207,7 +204,7 @@ class StyleConv(torch.nn.Module):
             pass
 
         act_gain = self.act_gain * gain
-        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
+        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
 
         return out
 
@@ -267,7 +264,6 @@ class MappingNet(torch.nn.Module):
         num_layers      = 8,        # Number of mapping layers.
         embed_features  = 0,        # Label embedding dimensionality, None = same as w_dim.
         layer_features  = 512,      # Number of intermediate features in the mapping layers, None = same as w_dim.
-        activation      = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
         lr_multiplier   = 0.01,     # Learning rate multiplier for the mapping layers.
         w_avg_beta      = 0.995,    # Decay for tracking the moving average of W during training, None = do not track.
     ):
@@ -279,7 +275,6 @@ class MappingNet(torch.nn.Module):
         # num_layers = 8
         # embed_features = 0
         # layer_features = 512
-        # activation = 'lrelu'
         # lr_multiplier = 0.01
         # w_avg_beta = 0.995
 
@@ -332,7 +327,7 @@ class MappingNet(torch.nn.Module):
 
 @persistence.persistent_class
 class DisFromRGB(nn.Module):
-    def __init__(self, in_channels, out_channels, activation):  # res = 2, ..., resolution_log2
+    def __init__(self, in_channels, out_channels):  # res = 2, ..., resolution_log2
         super().__init__()
         self.conv = Conv2dLayer(in_channels=in_channels,
                                 out_channels=out_channels,
@@ -347,7 +342,7 @@ class DisFromRGB(nn.Module):
 
 @persistence.persistent_class
 class DisBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, activation):  # res = 2, ..., resolution_log2
+    def __init__(self, in_channels, out_channels):  # res = 2, ..., resolution_log2
         super().__init__()
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                  out_channels=in_channels,

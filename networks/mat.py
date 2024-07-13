@@ -467,7 +467,7 @@ class BasicLayer(nn.Module):
 #----------------------------------------------------------------------------
 @persistence.persistent_class
 class EncFromRGB(nn.Module):
-    def __init__(self, in_channels, out_channels, activation):  # res = 2, ..., resolution_log2
+    def __init__(self, in_channels, out_channels):  # res = 2, ..., resolution_log2
         super().__init__()
         self.conv0 = Conv2dLayer(in_channels=in_channels,
                                 out_channels=out_channels,
@@ -486,7 +486,7 @@ class EncFromRGB(nn.Module):
 
 @persistence.persistent_class
 class ConvBlockDown(nn.Module):
-    def __init__(self, in_channels, out_channels, activation):  # res = 2, ..., resolution_log
+    def __init__(self, in_channels, out_channels):  # res = 2, ..., resolution_log
         super().__init__()
 
         self.conv0 = Conv2dLayer(in_channels=in_channels,
@@ -524,14 +524,12 @@ class Encoder(nn.Module):
     def __init__(self, 
         res_log2 = 9, 
         img_channels = 3, 
-        activation = 'lrelu', 
         patch_size=5, 
         channels=16, 
         drop_path_rate=0.1):
         super().__init__()
         # res_log2 = 9
         # img_channels = 3
-        # activation = 'lrelu'
         # patch_size = 5
         # channels = 16
         # drop_path_rate = 0.1
@@ -542,9 +540,9 @@ class Encoder(nn.Module):
             res = 2 ** i
             self.resolution.append(res)
             if i == res_log2:
-                block = EncFromRGB(img_channels * 2 + 1, nf(i), activation)
+                block = EncFromRGB(img_channels * 2 + 1, nf(i))
             else:
-                block = ConvBlockDown(nf(i+1), nf(i), activation)
+                block = ConvBlockDown(nf(i+1), nf(i))
             setattr(self, 'EncConv_Block_%dx%d' % (res, res), block)
         # self.resolution -- [512, 256, 128, 64, 32, 16]
 
@@ -612,8 +610,6 @@ class DecBlockFirstV2(nn.Module):
                               resolution=2**res,
                               kernel_size=3,
                               use_noise=True,
-                              activation='lrelu',
-                              demodulate=True,
                               )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -663,8 +659,6 @@ class DecBlock(nn.Module):
                                kernel_size=3,
                                up=2,
                                use_noise=True,
-                               activation='lrelu',
-                               demodulate=True,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
@@ -672,8 +666,6 @@ class DecBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                use_noise=True,
-                               activation='lrelu',
-                               demodulate=True,
                                )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -733,8 +725,6 @@ class DecStyleBlock(nn.Module):
                                kernel_size=3,
                                up=2,
                                use_noise=False,
-                               activation='lrelu',
-                               demodulate=True,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
@@ -742,8 +732,6 @@ class DecStyleBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                use_noise=False,
-                               activation='lrelu',
-                               demodulate=True,
                                )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -895,7 +883,7 @@ class SynthesisNet(nn.Module):
         self.first_stage = FirstStage(img_channels, img_resolution=img_resolution, w_dim=w_dim)
 
         # second stage
-        self.enc = Encoder(resolution_log2, img_channels, activation, patch_size=5, channels=16)
+        self.enc = Encoder(resolution_log2, img_channels, patch_size=5, channels=16)
         self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation=activation)
         self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2, activation=activation, drop_rate=drop_rate)
         style_dim = w_dim + nf(2) * 2 # ==> 1536
