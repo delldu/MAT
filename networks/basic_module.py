@@ -79,7 +79,7 @@ class Conv2dLayer(nn.Module):
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-                 conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
+                 # conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
                  trainable       = True,         # Update the weights of this layer during training?
                  ):
         super().__init__()
@@ -87,9 +87,9 @@ class Conv2dLayer(nn.Module):
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-        self.conv_clamp = conv_clamp
-        if conv_clamp:
-            pdb.set_trace()
+        # self.conv_clamp = conv_clamp
+        # if conv_clamp:
+        #     pdb.set_trace()
             
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
@@ -115,11 +115,11 @@ class Conv2dLayer(nn.Module):
                                             padding=self.padding)
 
         act_gain = self.act_gain * gain
-        act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
-        if act_clamp is not None:
-            pdb.set_trace()
+        # act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
+        # if act_clamp is not None:
+        #     pdb.set_trace()
 
-        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain, clamp=act_clamp)
+        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
         return out
 
 #----------------------------------------------------------------------------
@@ -135,7 +135,7 @@ class ModulatedConv2d(nn.Module):
                  up=1,                          # Integer upsampling factor.
                  down=1,                        # Integer downsampling factor.
                  resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
-                 conv_clamp=None,               # Clamp the output to +-X, None = disable clamping.
+                 # conv_clamp=None,               # Clamp the output to +-X, None = disable clamping.
                  ):
         super().__init__()
         self.demodulate = demodulate
@@ -148,7 +148,7 @@ class ModulatedConv2d(nn.Module):
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-        self.conv_clamp = conv_clamp
+        # self.conv_clamp = conv_clamp
 
         self.affine = FullyConnectedLayer(style_dim, in_channels, bias_init=1)
 
@@ -187,7 +187,7 @@ class StyleConv(torch.nn.Module):
         use_noise       = True,         # Enable noise input?
         activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        conv_clamp      = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
+        # conv_clamp      = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
         demodulate      = True,         # perform demodulation
     ):
         super().__init__()
@@ -198,8 +198,9 @@ class StyleConv(torch.nn.Module):
                                     style_dim=style_dim,
                                     demodulate=demodulate,
                                     up=up,
-                                    resample_filter=resample_filter,
-                                    conv_clamp=conv_clamp)
+                                    resample_filter=resample_filter)
+        # ,
+        #                             conv_clamp=conv_clamp)
 
         self.use_noise = use_noise
         self.resolution = resolution
@@ -214,7 +215,7 @@ class StyleConv(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.activation = activation
         self.act_gain = bias_act.activation_funcs[activation].def_gain
-        self.conv_clamp = conv_clamp
+        # self.conv_clamp = conv_clamp
 
     def forward(self, x, style, noise_mode='random', gain=1):
         x = self.conv(x, style)
@@ -234,8 +235,8 @@ class StyleConv(torch.nn.Module):
             pass
 
         act_gain = self.act_gain * gain
-        act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
-        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain, clamp=act_clamp)
+        # act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
+        out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain)
 
         return out
 
@@ -249,7 +250,7 @@ class ToRGB(torch.nn.Module):
                  style_dim,
                  kernel_size=1,
                  resample_filter=[1,3,3,1],
-                 conv_clamp=None,
+                 # conv_clamp=None,
                  demodulate=False):
         super().__init__()
 
@@ -258,16 +259,17 @@ class ToRGB(torch.nn.Module):
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
                                     demodulate=demodulate,
-                                    resample_filter=resample_filter,
-                                    conv_clamp=conv_clamp)
+                                    resample_filter=resample_filter)
+        # ,
+        #                             conv_clamp=conv_clamp)
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
-        self.conv_clamp = conv_clamp # None 
+        # self.conv_clamp = conv_clamp # None 
 
     def forward(self, x, style, skip=None):
         x = self.conv(x, style)
-        out = bias_act.bias_act(x, self.bias, clamp=self.conv_clamp)
+        out = bias_act.bias_act(x, self.bias)
 
         if skip is not None:
             # ==> pdb.set_trace()

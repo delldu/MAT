@@ -52,8 +52,8 @@ def _init():
     return _plugin is not None
 
 #----------------------------------------------------------------------------
-
-def bias_act(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None, impl='cuda'):
+# def bias_act(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None, impl='cuda'):
+def bias_act(x, b=None, dim=1, act='linear', alpha=None, gain=None):
     r"""Fused bias and activation function.
 
     Adds bias `b` to activation tensor `x`, evaluates activation function `act`,
@@ -88,22 +88,24 @@ def bias_act(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None, 
     # assert impl in ['ref', 'cuda']
     # if impl == 'cuda' and x.device.type == 'cuda' and _init():
     #     return _bias_act_cuda(dim=dim, act=act, alpha=alpha, gain=gain, clamp=clamp).apply(x, b)
-    return _bias_act_ref(x=x, b=b, dim=dim, act=act, alpha=alpha, gain=gain, clamp=clamp)
+    # return _bias_act_ref(x=x, b=b, dim=dim, act=act, alpha=alpha, gain=gain, clamp=clamp)
+#     return _bias_act_ref(x=x, b=b, dim=dim, act=act, alpha=alpha, gain=gain)
 
-#----------------------------------------------------------------------------
+# #----------------------------------------------------------------------------
 
-@misc.profiled_function
-def _bias_act_ref(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None):
-    """Slow reference implementation of `bias_act()` using standard TensorFlow ops.
-    """
+# @misc.profiled_function
+# # def _bias_act_ref(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None):
+# def _bias_act_ref(x, b=None, dim=1, act='linear', alpha=None, gain=None):
+#     """Slow reference implementation of `bias_act()` using standard TensorFlow ops.
+#     """
     assert isinstance(x, torch.Tensor)
-    assert clamp is None or clamp >= 0
+    # assert clamp is None or clamp >= 0
     spec = activation_funcs[act]
     # print("_bias_act_ref act ---- ", act)
 
     alpha = float(alpha if alpha is not None else spec.def_alpha)
     gain = float(gain if gain is not None else spec.def_gain)
-    clamp = float(clamp if clamp is not None else -1)
+    # clamp = float(clamp if clamp is not None else -1)
 
     # print("_bias_act_ref ---- ", "alpha=", alpha, "gain=", gain, "clamp=", clamp)
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951 clamp= -1.0
@@ -131,9 +133,9 @@ def _bias_act_ref(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=N
         pass
 
     # Clamp.
-    if clamp >= 0: # clamp= -1.0
-        pdb.set_trace()
-        x = x.clamp(-clamp, clamp) # pylint: disable=invalid-unary-operand-type
+    # if clamp >= 0: # clamp= -1.0
+    #     pdb.set_trace()
+    #     x = x.clamp(-clamp, clamp) # pylint: disable=invalid-unary-operand-type
 
     return x
 

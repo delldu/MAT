@@ -89,7 +89,7 @@ class Conv2dLayerPartial(nn.Module):
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-                 conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
+                 # conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
                  trainable       = True,         # Update the weights of this layer during training?
                  ):
         super().__init__()
@@ -101,7 +101,7 @@ class Conv2dLayerPartial(nn.Module):
             pdb.set_trace()
 
         self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, activation, up, down, resample_filter,
-                                conv_clamp, trainable)
+                                trainable)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
         self.slide_winsize = kernel_size ** 2

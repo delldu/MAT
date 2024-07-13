@@ -38,6 +38,9 @@ import pdb
 #     vals = s.split(',')
 #     return [int(x) for x in vals]
 
+def named_params_and_buffers(module):
+    assert isinstance(module, torch.nn.Module)
+    return list(module.named_parameters()) + list(module.named_buffers())
 
 def copy_params_and_buffers(src_module, dst_module, require_all=False):
     assert isinstance(src_module, torch.nn.Module)
@@ -52,12 +55,6 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False):
 # def params_and_buffers(module):
 #     assert isinstance(module, torch.nn.Module)
 #     return list(module.parameters()) + list(module.buffers())
-
-
-def named_params_and_buffers(module):
-    assert isinstance(module, torch.nn.Module)
-    return list(module.named_parameters()) + list(module.named_buffers())
-
 
 @click.command()
 @click.pass_context
@@ -133,6 +130,7 @@ def generate_images(
 
     if resolution != 512:
         noise_mode = 'random'
+
     # noise_mode -- 'const'
     # torch.save(G.state_dict(), "/tmp/G.pth") -- 242M
     # G -- SynthesisNet, FirstStage, Conv2dLayerPartial, SwinTransformerBlock, 
@@ -149,6 +147,7 @@ def generate_images(
                 mask = cv2.imread(mask_list[i], cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
                 mask = torch.from_numpy(mask).float().to(device).unsqueeze(0).unsqueeze(0)
             else:
+                pdb.set_trace()
                 mask = RandomMask(resolution) # adjust the masking ratio by using 'hole_range'
                 mask = torch.from_numpy(mask).float().to(device).unsqueeze(0)
 
@@ -159,8 +158,11 @@ def generate_images(
             todos.debug.output_var("mask", mask)
             todos.debug.output_var("z", z)
             todos.debug.output_var("truncation_psi", truncation_psi)
-            output = G(image, mask, z) #, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            output = G(image, mask, z, noise_mode=noise_mode) #, label, truncation_psi=truncation_psi)
             todos.debug.output_var("output", output)
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             # noise_mode:  const
             # tensor [image] size: [1, 3, 512, 512], min: -1.0, max: 1.0, mean: 0.044387
