@@ -11,7 +11,7 @@ import cv2
 import pyspng
 import glob
 import os
-import re
+# import re
 import random
 from typing import List, Optional
 
@@ -20,22 +20,23 @@ import dnnlib
 import numpy as np
 import PIL.Image
 import torch
-import torch.nn.functional as F
+# import torch.nn.functional as F
 
 import legacy
 from datasets.mask_generator_512 import RandomMask
 from networks.mat import Generator
+import todos
+import pdb
 
+# def num_range(s: str) -> List[int]:
+#     '''Accept either a comma separated list of numbers 'a,b,c' or a range 'a-c' and return as a list of ints.'''
 
-def num_range(s: str) -> List[int]:
-    '''Accept either a comma separated list of numbers 'a,b,c' or a range 'a-c' and return as a list of ints.'''
-
-    range_re = re.compile(r'^(\d+)-(\d+)$')
-    m = range_re.match(s)
-    if m:
-        return list(range(int(m.group(1)), int(m.group(2))+1))
-    vals = s.split(',')
-    return [int(x) for x in vals]
+#     range_re = re.compile(r'^(\d+)-(\d+)$')
+#     m = range_re.match(s)
+#     if m:
+#         return list(range(int(m.group(1)), int(m.group(2))+1))
+#     vals = s.split(',')
+#     return [int(x) for x in vals]
 
 
 def copy_params_and_buffers(src_module, dst_module, require_all=False):
@@ -48,9 +49,9 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False):
             tensor.copy_(src_tensors[name].detach()).requires_grad_(tensor.requires_grad)
 
 
-def params_and_buffers(module):
-    assert isinstance(module, torch.nn.Module)
-    return list(module.parameters()) + list(module.buffers())
+# def params_and_buffers(module):
+#     assert isinstance(module, torch.nn.Module)
+#     return list(module.parameters()) + list(module.buffers())
 
 
 def named_params_and_buffers(module):
@@ -100,12 +101,13 @@ def generate_images(
         G_saved = legacy.load_network_pkl(f)['G_ema'].to(device).eval().requires_grad_(False) # type: ignore
     net_res = 512 if resolution > 512 else resolution
     G = Generator(z_dim=512, c_dim=0, w_dim=512, img_resolution=net_res, img_channels=3).to(device).eval().requires_grad_(False)
+
     copy_params_and_buffers(G_saved, G, require_all=True)
 
     os.makedirs(outdir, exist_ok=True)
 
     # no Labels.
-    label = torch.zeros([1, G.c_dim], device=device)
+    # label = torch.zeros([1, G.c_dim], device=device)
 
     def read_image(image_path):
         with open(image_path, 'rb') as f:
@@ -131,6 +133,11 @@ def generate_images(
 
     if resolution != 512:
         noise_mode = 'random'
+    # noise_mode -- 'const'
+    # torch.save(G.state_dict(), "/tmp/G.pth") -- 242M
+    # G -- SynthesisNet, FirstStage, Conv2dLayerPartial, SwinTransformerBlock, 
+    #      BasicLayer, PatchMerging, PatchUpsampling, AdaptiveAvgPool2d, DecStyleBlock, DecBlockFirstV2
+
     with torch.no_grad():
         for i, ipath in enumerate(img_list):
             iname = os.path.basename(ipath).replace('.jpg', '.png')
@@ -146,9 +153,24 @@ def generate_images(
                 mask = torch.from_numpy(mask).float().to(device).unsqueeze(0)
 
             z = torch.from_numpy(np.random.randn(1, G.z_dim)).to(device)
-            output = G(image, mask, z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+
+            print("noise_mode: ", noise_mode)
+            todos.debug.output_var("image", image)
+            todos.debug.output_var("mask", mask)
+            todos.debug.output_var("z", z)
+            todos.debug.output_var("truncation_psi", truncation_psi)
+            output = G(image, mask, z) #, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+            todos.debug.output_var("output", output)
+
+            # noise_mode:  const
+            # tensor [image] size: [1, 3, 512, 512], min: -1.0, max: 1.0, mean: 0.044387
+            # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.493301
+            # tensor [z] size: [1, 512], min: -2.510093, max: 3.06608, mean: 0.064815
+            # [truncation_psi] value: '1.0'
+
             output = (output.permute(0, 2, 3, 1) * 127.5 + 127.5).round().clamp(0, 255).to(torch.uint8)
             output = output[0].cpu().numpy()
+
             PIL.Image.fromarray(output, 'RGB').save(f'{outdir}/{iname}')
 
 

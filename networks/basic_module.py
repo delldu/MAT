@@ -11,7 +11,8 @@ from torch_utils import persistence
 from torch_utils.ops import conv2d_resample
 from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
-
+import todos
+import pdb
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
@@ -23,8 +24,8 @@ def normalize_2nd_moment(x, dim=1, eps=1e-8):
 @persistence.persistent_class
 class FullyConnectedLayer(nn.Module):
     def __init__(self,
-                 in_features,                # Number of input features.
-                 out_features,               # Number of output features.
+                 in_features = 180,          # Number of input features.
+                 out_features = 180,         # Number of output features.
                  bias            = True,     # Apply additive bias before the activation function?
                  activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
                  lr_multiplier   = 1,        # Learning rate multiplier.
@@ -38,17 +39,29 @@ class FullyConnectedLayer(nn.Module):
         self.weight_gain = lr_multiplier / np.sqrt(in_features)
         self.bias_gain = lr_multiplier
 
+        # if activation != 'lrelu':
+        #     pdb.set_trace()
+        # if bias != True:
+        #     pass # ==> pdb.set_trace()
+
     def forward(self, x):
         w = self.weight * self.weight_gain
         b = self.bias
-        if b is not None and self.bias_gain != 1:
+        if b is not None and self.bias_gain != 1: # False for self.bias_gain === 1, True for self.bias_gain === 0.01
+            # ==> pdb.set_trace()
             b = b * self.bias_gain
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         if self.activation == 'linear' and b is not None:
+            # ==> pdb.set_trace() for self.activation === 'linear'
             # out = torch.addmm(b.unsqueeze(0), x, w.t())
             x = x.matmul(w.t())
             out = x + b.reshape([-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
         else:
+            # ==> pdb.set_trace()
+            # self.activation -- 'lrelu'
             x = x.matmul(w.t())
             out = bias_act.bias_act(x, b, act=self.activation, dim=x.ndim-1)
         return out
@@ -75,6 +88,9 @@ class Conv2dLayer(nn.Module):
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.conv_clamp = conv_clamp
+        if conv_clamp:
+            pdb.set_trace()
+            
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
         self.act_gain = bias_act.activation_funcs[activation].def_gain
@@ -85,6 +101,8 @@ class Conv2dLayer(nn.Module):
             self.weight = torch.nn.Parameter(weight)
             self.bias = torch.nn.Parameter(bias) if bias is not None else None
         else:
+            pdb.set_trace()
+
             self.register_buffer('weight', weight)
             if bias is not None:
                 self.register_buffer('bias', bias)
@@ -98,6 +116,9 @@ class Conv2dLayer(nn.Module):
 
         act_gain = self.act_gain * gain
         act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
+        if act_clamp is not None:
+            pdb.set_trace()
+
         out = bias_act.bias_act(x, self.bias, act=self.activation, gain=act_gain, clamp=act_clamp)
         return out
 
@@ -137,8 +158,12 @@ class ModulatedConv2d(nn.Module):
         weight = self.weight * self.weight_gain * style
 
         if self.demodulate:
+            # ==> pdb.set_trace()
             decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
             weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
         x = x.view(1, batch * in_channels, height, width)
@@ -179,8 +204,12 @@ class StyleConv(torch.nn.Module):
         self.use_noise = use_noise
         self.resolution = resolution
         if use_noise:
+            # ==> pdb.set_trace()
             self.register_buffer('noise_const', torch.randn([resolution, resolution]))
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.activation = activation
@@ -200,6 +229,9 @@ class StyleConv(torch.nn.Module):
             if noise_mode == 'const':
                 noise = self.noise_const * self.noise_strength
             x = x + noise
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         act_gain = self.act_gain * gain
         act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
@@ -230,16 +262,22 @@ class ToRGB(torch.nn.Module):
                                     conv_clamp=conv_clamp)
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-        self.conv_clamp = conv_clamp
+        #  self.resample_filter.size() -- [4, 4]
+        self.conv_clamp = conv_clamp # None 
 
     def forward(self, x, style, skip=None):
         x = self.conv(x, style)
         out = bias_act.bias_act(x, self.bias, clamp=self.conv_clamp)
 
         if skip is not None:
+            # ==> pdb.set_trace()
             if skip.shape != out.shape:
+                # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
                 skip = upfirdn2d.upsample2d(skip, self.resample_filter)
             out = out + skip
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         return out
 
@@ -251,141 +289,153 @@ def get_style_code(a, b):
 
 #----------------------------------------------------------------------------
 
-@persistence.persistent_class
-class DecBlockFirst(nn.Module):
-    def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
-        super().__init__()
-        self.fc = FullyConnectedLayer(in_features=in_channels*2,
-                                      out_features=in_channels*4**2,
-                                      activation=activation)
-        self.conv = StyleConv(in_channels=in_channels,
-                              out_channels=out_channels,
-                              style_dim=style_dim,
-                              resolution=4,
-                              kernel_size=3,
-                              use_noise=use_noise,
-                              activation=activation,
-                              demodulate=demodulate,
-                              )
-        self.toRGB = ToRGB(in_channels=out_channels,
-                           out_channels=img_channels,
-                           style_dim=style_dim,
-                           kernel_size=1,
-                           demodulate=False,
-                           )
+# @persistence.persistent_class
+# class DecBlockFirst(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
+#         super().__init__()
+#         self.fc = FullyConnectedLayer(in_features=in_channels*2,
+#                                       out_features=in_channels*4**2,
+#                                       activation=activation)
+#         self.conv = StyleConv(in_channels=in_channels,
+#                               out_channels=out_channels,
+#                               style_dim=style_dim,
+#                               resolution=4,
+#                               kernel_size=3,
+#                               use_noise=use_noise,
+#                               activation=activation,
+#                               demodulate=demodulate,
+#                               )
+#         self.toRGB = ToRGB(in_channels=out_channels,
+#                            out_channels=img_channels,
+#                            style_dim=style_dim,
+#                            kernel_size=1,
+#                            demodulate=False,
+#                            )
 
-    def forward(self, x, ws, gs, E_features, noise_mode='random'):
-        x = self.fc(x).view(x.shape[0], -1, 4, 4)
-        x = x + E_features[2]
-        style = get_style_code(ws[:, 0], gs)
-        x = self.conv(x, style, noise_mode=noise_mode)
-        style = get_style_code(ws[:, 1], gs)
-        img = self.toRGB(x, style, skip=None)
+#     def forward(self, x, ws, gs, E_features, noise_mode='random'):
+#         x = self.fc(x).view(x.shape[0], -1, 4, 4)
+#         x = x + E_features[2]
+#         style = get_style_code(ws[:, 0], gs)
+#         x = self.conv(x, style, noise_mode=noise_mode)
+#         style = get_style_code(ws[:, 1], gs)
+#         img = self.toRGB(x, style, skip=None)
 
-        return x, img
+#         return x, img
 
 
-@persistence.persistent_class
-class DecBlockFirstV2(nn.Module):
-    def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
-        super().__init__()
-        self.conv0 = Conv2dLayer(in_channels=in_channels,
-                                out_channels=in_channels,
-                                kernel_size=3,
-                                activation=activation,
-                                )
-        self.conv1 = StyleConv(in_channels=in_channels,
-                              out_channels=out_channels,
-                              style_dim=style_dim,
-                              resolution=4,
-                              kernel_size=3,
-                              use_noise=use_noise,
-                              activation=activation,
-                              demodulate=demodulate,
-                              )
-        self.toRGB = ToRGB(in_channels=out_channels,
-                           out_channels=img_channels,
-                           style_dim=style_dim,
-                           kernel_size=1,
-                           demodulate=False,
-                           )
+# @persistence.persistent_class
+# class DecBlockFirstV2(nn.Module):
+#     def __init__(self, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):
+#         super().__init__()
+#         self.conv0 = Conv2dLayer(in_channels=in_channels,
+#                                 out_channels=in_channels,
+#                                 kernel_size=3,
+#                                 activation=activation,
+#                                 )
+#         self.conv1 = StyleConv(in_channels=in_channels,
+#                               out_channels=out_channels,
+#                               style_dim=style_dim,
+#                               resolution=4,
+#                               kernel_size=3,
+#                               use_noise=use_noise,
+#                               activation=activation,
+#                               demodulate=demodulate,
+#                               )
+#         self.toRGB = ToRGB(in_channels=out_channels,
+#                            out_channels=img_channels,
+#                            style_dim=style_dim,
+#                            kernel_size=1,
+#                            demodulate=False,
+#                            )
 
-    def forward(self, x, ws, gs, E_features, noise_mode='random'):
-        # x = self.fc(x).view(x.shape[0], -1, 4, 4)
-        x = self.conv0(x)
-        x = x + E_features[2]
-        style = get_style_code(ws[:, 0], gs)
-        x = self.conv1(x, style, noise_mode=noise_mode)
-        style = get_style_code(ws[:, 1], gs)
-        img = self.toRGB(x, style, skip=None)
+#     def forward(self, x, ws, gs, E_features, noise_mode='random'):
+#         # x = self.fc(x).view(x.shape[0], -1, 4, 4)
+#         x = self.conv0(x)
+#         x = x + E_features[2]
+#         style = get_style_code(ws[:, 0], gs)
+#         x = self.conv1(x, style, noise_mode=noise_mode)
+#         style = get_style_code(ws[:, 1], gs)
+#         img = self.toRGB(x, style, skip=None)
 
-        return x, img
+#         return x, img
 
 #----------------------------------------------------------------------------
 
-@persistence.persistent_class
-class DecBlock(nn.Module):
-    def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):  # res = 2, ..., resolution_log2
-        super().__init__()
-        self.res = res
+# @persistence.persistent_class
+# class DecBlock(nn.Module):
+#     def __init__(self, res, in_channels, out_channels, activation, style_dim, use_noise, demodulate, img_channels):  # res = 2, ..., resolution_log2
+#         super().__init__()
+#         self.res = res
 
-        self.conv0 = StyleConv(in_channels=in_channels,
-                               out_channels=out_channels,
-                               style_dim=style_dim,
-                               resolution=2**res,
-                               kernel_size=3,
-                               up=2,
-                               use_noise=use_noise,
-                               activation=activation,
-                               demodulate=demodulate,
-                               )
-        self.conv1 = StyleConv(in_channels=out_channels,
-                               out_channels=out_channels,
-                               style_dim=style_dim,
-                               resolution=2**res,
-                               kernel_size=3,
-                               use_noise=use_noise,
-                               activation=activation,
-                               demodulate=demodulate,
-                               )
-        self.toRGB = ToRGB(in_channels=out_channels,
-                           out_channels=img_channels,
-                           style_dim=style_dim,
-                           kernel_size=1,
-                           demodulate=False,
-                           )
+#         self.conv0 = StyleConv(in_channels=in_channels,
+#                                out_channels=out_channels,
+#                                style_dim=style_dim,
+#                                resolution=2**res,
+#                                kernel_size=3,
+#                                up=2,
+#                                use_noise=use_noise,
+#                                activation=activation,
+#                                demodulate=demodulate,
+#                                )
+#         self.conv1 = StyleConv(in_channels=out_channels,
+#                                out_channels=out_channels,
+#                                style_dim=style_dim,
+#                                resolution=2**res,
+#                                kernel_size=3,
+#                                use_noise=use_noise,
+#                                activation=activation,
+#                                demodulate=demodulate,
+#                                )
+#         self.toRGB = ToRGB(in_channels=out_channels,
+#                            out_channels=img_channels,
+#                            style_dim=style_dim,
+#                            kernel_size=1,
+#                            demodulate=False,
+#                            )
 
-    def forward(self, x, img, ws, gs, E_features, noise_mode='random'):
-        style = get_style_code(ws[:, self.res * 2 - 5], gs)
-        x = self.conv0(x, style, noise_mode=noise_mode)
-        x = x + E_features[self.res]
-        style = get_style_code(ws[:, self.res * 2 - 4], gs)
-        x = self.conv1(x, style, noise_mode=noise_mode)
-        style = get_style_code(ws[:, self.res * 2 - 3], gs)
-        img = self.toRGB(x, style, skip=img)
+#     def forward(self, x, img, ws, gs, E_features, noise_mode='random'):
+#         style = get_style_code(ws[:, self.res * 2 - 5], gs)
+#         x = self.conv0(x, style, noise_mode=noise_mode)
+#         x = x + E_features[self.res]
+#         style = get_style_code(ws[:, self.res * 2 - 4], gs)
+#         x = self.conv1(x, style, noise_mode=noise_mode)
+#         style = get_style_code(ws[:, self.res * 2 - 3], gs)
+#         img = self.toRGB(x, style, skip=img)
 
-        return x, img
+#         return x, img
 
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
 class MappingNet(torch.nn.Module):
     def __init__(self,
-        z_dim,                      # Input latent (Z) dimensionality, 0 = no latent.
-        c_dim,                      # Conditioning label (C) dimensionality, 0 = no label.
-        w_dim,                      # Intermediate latent (W) dimensionality.
-        num_ws,                     # Number of intermediate latents to output, None = do not broadcast.
+        z_dim = 512,                # Input latent (Z) dimensionality, 0 = no latent.
+        c_dim = 0,                  # Conditioning label (C) dimensionality, 0 = no label.
+        w_dim = 512,                # Intermediate latent (W) dimensionality.
+        num_ws = 12,                # Number of intermediate latents to output, None = do not broadcast.
         num_layers      = 8,        # Number of mapping layers.
-        embed_features  = None,     # Label embedding dimensionality, None = same as w_dim.
-        layer_features  = None,     # Number of intermediate features in the mapping layers, None = same as w_dim.
+        embed_features  = 0,        # Label embedding dimensionality, None = same as w_dim.
+        layer_features  = 512,      # Number of intermediate features in the mapping layers, None = same as w_dim.
         activation      = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
         lr_multiplier   = 0.01,     # Learning rate multiplier for the mapping layers.
         w_avg_beta      = 0.995,    # Decay for tracking the moving average of W during training, None = do not track.
     ):
         super().__init__()
+        # z_dim = 512
+        # c_dim = 0
+        # w_dim = 512
+        # num_ws = 12
+        # num_layers = 8
+        # embed_features = 0
+        # layer_features = 512
+        # activation = 'lrelu'
+        # lr_multiplier = 0.01
+        # w_avg_beta = 0.995
+
+
         self.z_dim = z_dim
         self.c_dim = c_dim
-        self.w_dim = w_dim
+        # self.w_dim = w_dim
         self.num_ws = num_ws
         self.num_layers = num_layers
         self.w_avg_beta = w_avg_beta
@@ -394,55 +444,88 @@ class MappingNet(torch.nn.Module):
             embed_features = w_dim
         if c_dim == 0:
             embed_features = 0
-        if layer_features is None:
+        # ==> embed_features === 0
+
+        if layer_features is None: # False
+            pdb.set_trace()
             layer_features = w_dim
         features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
+        # features_list --- [512, 512, 512, 512, 512, 512, 512, 512, 512]
 
-        if c_dim > 0:
-            self.embed = FullyConnectedLayer(c_dim, embed_features)
-        for idx in range(num_layers):
+        # if c_dim > 0:
+        #     pdb.set_trace()
+        #     self.embed = FullyConnectedLayer(c_dim, embed_features)
+
+        for idx in range(num_layers): # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
             layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier)
             setattr(self, f'fc{idx}', layer)
 
-        if num_ws is not None and w_avg_beta is not None:
+        if num_ws is not None and w_avg_beta is not None: # True
             self.register_buffer('w_avg', torch.zeros([w_dim]))
+        # self.w_avg.size() -- [512]
 
-    def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    # def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    def forward(self, z):
+        # tensor [z] size: [1, 512], min: -2.510093, max: 3.06608, mean: 0.064815
+        # pp c -- [], device='cuda:0', size=(1, 0)
+
+        # todos.debug.output_var("truncation_cutoff", truncation_cutoff)
+        # todos.debug.output_var("skip_w_avg_update", skip_w_avg_update)
+
         # Embed, normalize, and concat inputs.
-        x = None
-        with torch.autograd.profiler.record_function('input'):
-            if self.z_dim > 0:
-                x = normalize_2nd_moment(z.to(torch.float32))
-            if self.c_dim > 0:
-                y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
-                x = torch.cat([x, y], dim=1) if x is not None else y
+        # x = None
+        # with torch.autograd.profiler.record_function('input'):
+        #     if self.z_dim > 0: # True
+        #         x = normalize_2nd_moment(z.to(torch.float32))
+        #     else:
+        #         pdb.set_trace()
+        #         pass
+
+        #     if self.c_dim > 0:
+        #         pdb.set_trace()
+
+        #         y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
+        #         x = torch.cat([x, y], dim=1) if x is not None else y
+        #     else:
+        #         pass
+        #         #pdb.set_trace()
+
+        x = normalize_2nd_moment(z.to(torch.float32))
 
         # Main layers.
-        for idx in range(self.num_layers):
+        for idx in range(self.num_layers): # self.num_layers === 8
             layer = getattr(self, f'fc{idx}')
             x = layer(x)
 
         # Update moving average of W.
-        if self.w_avg_beta is not None and self.training and not skip_w_avg_update:
-            with torch.autograd.profiler.record_function('update_w_avg'):
-                self.w_avg.copy_(x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta))
+        # if self.w_avg_beta is not None and self.training and not skip_w_avg_update:
+        #     pdb.set_trace()
+        #     with torch.autograd.profiler.record_function('update_w_avg'):
+        #         self.w_avg.copy_(x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta))
 
         # Broadcast.
-        if self.num_ws is not None:
-            with torch.autograd.profiler.record_function('broadcast'):
-                x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
+        # if self.num_ws is not None: # True
+        #     # ==> pdb.set_trace() for self.num_ws === 12
+        #     with torch.autograd.profiler.record_function('broadcast'):
+        #         x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
+        # else:
+        #     pdb.set_trace()
+        x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
 
         # Apply truncation.
-        if truncation_psi != 1:
-            with torch.autograd.profiler.record_function('truncate'):
-                assert self.w_avg_beta is not None
-                if self.num_ws is None or truncation_cutoff is None:
-                    x = self.w_avg.lerp(x, truncation_psi)
-                else:
-                    x[:, :truncation_cutoff] = self.w_avg.lerp(x[:, :truncation_cutoff], truncation_psi)
+        # if truncation_psi != 1:
+        #     pdb.set_trace()
 
+        #     with torch.autograd.profiler.record_function('truncate'):
+        #         assert self.w_avg_beta is not None
+        #         if self.num_ws is None or truncation_cutoff is None:
+        #             x = self.w_avg.lerp(x, truncation_psi)
+        #         else:
+        #             x[:, :truncation_cutoff] = self.w_avg.lerp(x[:, :truncation_cutoff], truncation_psi)
+
+        # tensor [x] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
         return x
 
 #----------------------------------------------------------------------------
@@ -456,6 +539,7 @@ class DisFromRGB(nn.Module):
                                 kernel_size=1,
                                 activation=activation,
                                 )
+        pdb.set_trace()
 
     def forward(self, x):
         return self.conv(x)
@@ -483,6 +567,7 @@ class DisBlock(nn.Module):
                                 down=2,
                                 bias=False,
                              )
+        pdb.set_trace()
 
     def forward(self, x):
         skip = self.skip(x, gain=np.sqrt(0.5))
@@ -500,8 +585,11 @@ class MinibatchStdLayer(torch.nn.Module):
         super().__init__()
         self.group_size = group_size
         self.num_channels = num_channels
+        pdb.set_trace()
 
     def forward(self, x):
+        pdb.set_trace()
+
         N, C, H, W = x.shape
         with misc.suppress_tracer_warnings():  # as_tensor results are registered as constants
             G = torch.min(torch.as_tensor(self.group_size),
@@ -518,66 +606,68 @@ class MinibatchStdLayer(torch.nn.Module):
         y = y.reshape(-1, F, 1, 1)  # [nF11]   Add missing dimensions.
         y = y.repeat(G, 1, H, W)  # [NFHW]   Replicate over group and pixels.
         x = torch.cat([x, y], dim=1)  # [NCHW]   Append to input as new channels.
+
+        pdb.set_trace()
         return x
 
 #----------------------------------------------------------------------------
 
-@persistence.persistent_class
-class Discriminator(torch.nn.Module):
-    def __init__(self,
-                 c_dim,                        # Conditioning label (C) dimensionality.
-                 img_resolution,               # Input resolution.
-                 img_channels,                 # Number of input color channels.
-                 channel_base       = 32768,    # Overall multiplier for the number of channels.
-                 channel_max        = 512,      # Maximum number of channels in any layer.
-                 channel_decay      = 1,
-                 cmap_dim           = None,     # Dimensionality of mapped conditioning label, None = default.
-                 activation         = 'lrelu',
-                 mbstd_group_size   = 4,        # Group size for the minibatch standard deviation layer, None = entire minibatch.
-                 mbstd_num_channels = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
-                 ):
-        super().__init__()
-        self.c_dim = c_dim
-        self.img_resolution = img_resolution
-        self.img_channels = img_channels
+# @persistence.persistent_class
+# class Discriminator(torch.nn.Module):
+#     def __init__(self,
+#                  c_dim,                        # Conditioning label (C) dimensionality.
+#                  img_resolution,               # Input resolution.
+#                  img_channels,                 # Number of input color channels.
+#                  channel_base       = 32768,    # Overall multiplier for the number of channels.
+#                  channel_max        = 512,      # Maximum number of channels in any layer.
+#                  channel_decay      = 1,
+#                  cmap_dim           = None,     # Dimensionality of mapped conditioning label, None = default.
+#                  activation         = 'lrelu',
+#                  mbstd_group_size   = 4,        # Group size for the minibatch standard deviation layer, None = entire minibatch.
+#                  mbstd_num_channels = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
+#                  ):
+#         super().__init__()
+#         self.c_dim = c_dim
+#         self.img_resolution = img_resolution
+#         self.img_channels = img_channels
 
-        resolution_log2 = int(np.log2(img_resolution))
-        assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
-        self.resolution_log2 = resolution_log2
+#         resolution_log2 = int(np.log2(img_resolution))
+#         assert img_resolution == 2 ** resolution_log2 and img_resolution >= 4
+#         self.resolution_log2 = resolution_log2
 
-        def nf(stage):
-            return np.clip(int(channel_base / 2 ** (stage * channel_decay)), 1, channel_max)
+#         def nf(stage):
+#             return np.clip(int(channel_base / 2 ** (stage * channel_decay)), 1, channel_max)
 
-        if cmap_dim == None:
-            cmap_dim = nf(2)
-        if c_dim == 0:
-            cmap_dim = 0
-        self.cmap_dim = cmap_dim
+#         if cmap_dim == None:
+#             cmap_dim = nf(2)
+#         if c_dim == 0:
+#             cmap_dim = 0
+#         self.cmap_dim = cmap_dim
 
-        if c_dim > 0:
-            self.mapping = MappingNet(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None)
+#         if c_dim > 0:
+#             self.mapping = MappingNet(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None)
 
-        Dis = [DisFromRGB(img_channels+1, nf(resolution_log2), activation)]
-        for res in range(resolution_log2, 2, -1):
-            Dis.append(DisBlock(nf(res), nf(res-1), activation))
+#         Dis = [DisFromRGB(img_channels+1, nf(resolution_log2), activation)]
+#         for res in range(resolution_log2, 2, -1):
+#             Dis.append(DisBlock(nf(res), nf(res-1), activation))
 
-        if mbstd_num_channels > 0:
-            Dis.append(MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels))
-        Dis.append(Conv2dLayer(nf(2) + mbstd_num_channels, nf(2), kernel_size=3, activation=activation))
-        self.Dis = nn.Sequential(*Dis)
+#         if mbstd_num_channels > 0:
+#             Dis.append(MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels))
+#         Dis.append(Conv2dLayer(nf(2) + mbstd_num_channels, nf(2), kernel_size=3, activation=activation))
+#         self.Dis = nn.Sequential(*Dis)
 
-        self.fc0 = FullyConnectedLayer(nf(2)*4**2, nf(2), activation=activation)
-        self.fc1 = FullyConnectedLayer(nf(2), 1 if cmap_dim == 0 else cmap_dim)
+#         self.fc0 = FullyConnectedLayer(nf(2)*4**2, nf(2), activation=activation)
+#         self.fc1 = FullyConnectedLayer(nf(2), 1 if cmap_dim == 0 else cmap_dim)
 
-    def forward(self, images_in, masks_in, c):
-        x = torch.cat([masks_in - 0.5, images_in], dim=1)
-        x = self.Dis(x)
-        x = self.fc1(self.fc0(x.flatten(start_dim=1)))
+#     def forward(self, images_in, masks_in, c):
+#         x = torch.cat([masks_in - 0.5, images_in], dim=1)
+#         x = self.Dis(x)
+#         x = self.fc1(self.fc0(x.flatten(start_dim=1)))
 
-        if self.c_dim > 0:
-            cmap = self.mapping(None, c)
+#         if self.c_dim > 0:
+#             cmap = self.mapping(None, c)
 
-        if self.cmap_dim > 0:
-            x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
+#         if self.cmap_dim > 0:
+#             x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
 
-        return x
+#         return x
