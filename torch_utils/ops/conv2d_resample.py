@@ -36,6 +36,10 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
     # Flip weight if requested.
     if not flip_weight: # conv2d() actually performs correlation (flip_weight=True) not convolution (flip_weight=False).
         w = w.flip([2, 3])
+        # ==> pdb.set_trace()
+    else:
+        # ==> pdb.set_trace()
+        pass
 
     # Workaround performance pitfall in cuDNN 8.0.5, triggered when using
     # 1x1 kernel + memory_format=channels_last + less than 64 channels.
@@ -43,7 +47,7 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
         # _get_weight_shape(w) -- [3, 180, 1, 1]
         if x.stride()[1] == 1 and min(out_channels, in_channels_per_group) < 64:
             pdb.set_trace()
-            
+
             if out_channels <= 4 and groups == 1:
                 in_shape = x.shape
                 x = w.squeeze(3).squeeze(2) @ x.reshape([in_shape[0], in_channels_per_group, -1])

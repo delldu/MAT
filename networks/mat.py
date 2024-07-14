@@ -112,8 +112,7 @@ class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
     """
 
-    def __init__(self, dim, window_size, num_heads, down_ratio=1):
-
+    def __init__(self, dim, window_size, num_heads):
         super().__init__()
         # self.dim = dim
         self.window_size = window_size  # Wh, Ww
@@ -125,7 +124,6 @@ class WindowAttention(nn.Module):
         self.k = LinearFC(in_features=dim, out_features=dim)
         self.v = LinearFC(in_features=dim, out_features=dim)
         self.proj = LinearFC(in_features=dim, out_features=dim)
-
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, mask_windows=None, mask=None):
@@ -172,24 +170,18 @@ class SwinTransformerBlock(nn.Module):
     r""" Swin Transformer Block.
     """
 
-    def __init__(self, dim, input_resolution, num_heads, down_ratio=1, window_size=7, shift_size=0,
-                 mlp_ratio=4.):
+    def __init__(self, dim, input_resolution, num_heads,  
+                    window_size=7, shift_size=0):
         super().__init__()
         # dim = 180
         # input_resolution = [64, 64]
         # num_heads = 6
-        # down_ratio = 1
-        # window_size = 8
-        # shift_size = 0
-        # mlp_ratio = 2.0
 
 
-        # self.dim = dim
         self.input_resolution = input_resolution
-        self.num_heads = num_heads
+        # self.num_heads = num_heads
         self.window_size = window_size
         self.shift_size = shift_size
-        # self.mlp_ratio = mlp_ratio
         if min(self.input_resolution) <= self.window_size:
             # ==> pdb.set_trace()
             # if window size is larger than input resolution, we don't partition windows
@@ -197,24 +189,15 @@ class SwinTransformerBlock(nn.Module):
             self.window_size = min(self.input_resolution)
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
-        if self.shift_size > 0:
-            down_ratio = 1
         self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), 
-                        num_heads=num_heads, down_ratio=down_ratio)
-
+                        num_heads=num_heads)
         self.fuse = FullyConnectedLayer(in_features=dim * 2, out_features=dim)
+        self.mlp = Mlp(in_features=dim, hidden_features=dim * 2)
 
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim)
-
-        if self.shift_size > 0:
-            # ==> pdb.set_trace()
-            attn_mask = self.calculate_mask(self.input_resolution)
-        else:
-            # ==> pdb.set_trace()
-            attn_mask = None
-
-        self.register_buffer("attn_mask", attn_mask) # None ???
+        # shift_size = 0, window_size=8
+        # shift_size = 4, window_size=8
+        # shift_size = 0, window_size=16
+        # shift_size = 8, window_size=16
 
     def calculate_mask(self, x_size):
         # calculate attention mask for SW-MSA
@@ -272,11 +255,8 @@ class SwinTransformerBlock(nn.Module):
             # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.input_resolution == x_size:
-            attn_windows, mask_windows = self.attn(x_windows, mask_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
-        else:
-            # ==> pdb.set_trace()
-            attn_windows, mask_windows = self.attn(x_windows, mask_windows, mask=self.calculate_mask(x_size).to(x.device))  # nW*B, window_size*window_size, C
+        attn_windows, mask_windows = self.attn(x_windows, mask_windows, 
+            mask=self.calculate_mask(x_size).to(x.device))  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -321,6 +301,7 @@ class PatchMerging(nn.Module):
                                        down=down,
                                        )
         self.down = down
+        # self.down === 2
 
     def forward(self, x, x_size, mask=None):
         x = token2feature(x, x_size)
@@ -332,7 +313,7 @@ class PatchMerging(nn.Module):
             pass
 
         x, mask = self.conv(x, mask)
-        ratio = 1 / self.down
+        ratio = 1 / self.down # self.down === 2
         x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
 
         x = feature2token(x)
@@ -343,6 +324,15 @@ class PatchMerging(nn.Module):
             # pdb.set_trace()
 
         return x, x_size, mask
+
+
+@persistence.persistent_class
+class PatchIdentity(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, x_size, mask=None):
+        return x
 
 # xxxx_debug
 @persistence.persistent_class
@@ -380,21 +370,24 @@ class PatchUpsampling(nn.Module):
 @persistence.persistent_class
 class BasicLayer(nn.Module):
     """ A basic Swin Transformer layer for one stage.
+
+        BasicLayer(dim=dim, 
+                   input_resolution=[res, res], 
+                   depth=depth, 
+                   num_heads=num_heads,
+                   window_size=window_sizes[i], 
+                   downsample=merge)
     """
 
-    def __init__(self, dim, input_resolution, depth, num_heads, window_size, down_ratio=1,
-                 mlp_ratio=2., downsample=None):
-
+    def __init__(self, dim, input_resolution, depth, num_heads, window_size, 
+                 downsample=None):
         super().__init__()
         # dim = 180
         # input_resolution = [64, 64]
         # depth = 2
         # num_heads = 6
         # window_size = 8
-        # down_ratio = 1
-        # mlp_ratio = 2.0
         # downsample = None
-
 
         # pdb.set_trace()
         self.input_resolution = input_resolution
@@ -410,9 +403,8 @@ class BasicLayer(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList([
             SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
-                                 num_heads=num_heads, down_ratio=down_ratio, window_size=window_size,
-                                 shift_size=0 if (i % 2 == 0) else window_size // 2,
-                                 mlp_ratio=mlp_ratio)
+                                 num_heads=num_heads, window_size=window_size,
+                                 shift_size=0 if (i % 2 == 0) else window_size // 2)
             for i in range(depth)]) # depth === 2
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
@@ -744,9 +736,12 @@ class FirstStage(nn.Module):
             elif ratios[i] > 1:
                 merge = PatchUpsampling(dim, dim, up=ratios[i])
             else:
-                merge = None # ==> ratios[i] === 1
+                merge = None # PatchIdentity() # None # ==> ratios[i] === 1
             self.tran.append(
-                BasicLayer(dim=dim, input_resolution=[res, res], depth=depth, num_heads=num_heads,
+                BasicLayer(dim=dim, 
+                           input_resolution=[res, res], 
+                           depth=depth, 
+                           num_heads=num_heads,
                            window_size=window_sizes[i], 
                            downsample=merge)
             )
