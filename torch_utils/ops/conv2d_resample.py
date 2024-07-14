@@ -40,7 +40,10 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
     # Workaround performance pitfall in cuDNN 8.0.5, triggered when using
     # 1x1 kernel + memory_format=channels_last + less than 64 channels.
     if kw == 1 and kh == 1 and stride == 1 and padding in [0, [0, 0], (0, 0)] and not transpose:
+        # _get_weight_shape(w) -- [3, 180, 1, 1]
         if x.stride()[1] == 1 and min(out_channels, in_channels_per_group) < 64:
+            pdb.set_trace()
+            
             if out_channels <= 4 and groups == 1:
                 in_shape = x.shape
                 x = w.squeeze(3).squeeze(2) @ x.reshape([in_shape[0], in_channels_per_group, -1])
@@ -66,10 +69,10 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # w.size() -- [180, 4, 3, 3]
     # f.size() -- [4, 4]
     # ---------------------------------
-    # up = 1
-    # down = 1
-    # padding = 1
-    print(f"conv2d_resample up = {up}, down = {down}, padding = {padding}")
+    # up = 1, down = 1, padding = 1
+    # up = 1, down = 2, padding = 1
+    # up = 2, down = 1, padding = 1
+    # up = 1, down = 1, padding = 0
 
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
@@ -78,6 +81,7 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     assert isinstance(down, int) and (down >= 1)
     out_channels, in_channels_per_group, kh, kw = _get_weight_shape(w)
     fw, fh = _get_filter_size(f)
+    # fw === 4, fh === 4
     px0, px1, py0, py1 = _parse_padding(padding)
 
     # Adjust padding to account for up/downsampling.
@@ -95,6 +99,7 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
 
     # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
     if kw == 1 and kh == 1 and (down > 1 and up == 1):
+        pdb.set_trace()
         x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1], 
             flip_filter=False)
         x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
