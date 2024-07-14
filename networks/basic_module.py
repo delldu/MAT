@@ -255,7 +255,7 @@ class ToRGB(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
 
-    def forward(self, x, style):
+    def forward(self, x, style, skip=None):
         x = self.conv(x, style)
         out = bias_act.bias_act(x, self.bias)
         return out
@@ -285,10 +285,11 @@ class ToRGBWithSkip(torch.nn.Module):
         x = self.conv(x, style)
         out = bias_act.bias_act(x, self.bias)
 
-        if skip.shape != out.shape:
-            # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
-            skip = upfirdn2d.upsample2d(skip, self.resample_filter)
-        out = out + skip
+        if skip is not None:
+            if skip.shape != out.shape:
+                # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
+                skip = upfirdn2d.upsample2d(skip, self.resample_filter)
+            out = out + skip
 
         return out
 

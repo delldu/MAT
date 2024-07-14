@@ -631,7 +631,7 @@ class DecBlockFirstV2(nn.Module):
         style = get_style_code(ws[:, 0], gs) # ws[:, 0].size() -- [1, 512]
         x = self.conv1(x, style, noise_mode=noise_mode)
         style = get_style_code(ws[:, 1], gs)
-        img = self.toRGB(x, style)
+        img = self.toRGB(x, style, skip=None)
 
         # tensor [x] size: [1, 512, 16, 16], min: -14.745468, max: 52.303444, mean: -0.170848
         # tensor [img] size: [1, 3, 16, 16], min: -0.003557, max: 0.002705, mean: -0.000736
@@ -723,7 +723,7 @@ class DecStyleBlock(nn.Module):
                                kernel_size=3,
                                use_noise=False,
                                )
-        self.toRGB = ToRGB(in_channels=out_channels,
+        self.toRGB = ToRGBWithSkip(in_channels=out_channels,
                            out_channels=img_channels,
                            style_dim=style_dim,
                            )
