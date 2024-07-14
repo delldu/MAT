@@ -18,6 +18,7 @@ from networks.basic_module import (
     Conv2dLayer, 
     MappingNet, 
     StyleConv, 
+    StyleConvWithNoise,
     ToRGB, 
     ToRGBWithSkip,
     get_style_code,
@@ -601,12 +602,11 @@ class DecBlockFirstV2(nn.Module):
                                 out_channels=in_channels,
                                 kernel_size=3,
                                 )
-        self.conv1 = StyleConv(in_channels=in_channels,
+        self.conv1 = StyleConvWithNoise(in_channels=in_channels,
                               out_channels=out_channels,
                               style_dim=style_dim,
                               resolution=2**res,
                               kernel_size=3,
-                              use_noise=True,
                               )
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
@@ -644,20 +644,18 @@ class DecBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):  # res = 4, ..., resolution_log2
         super().__init__()
         self.res = res
-        self.conv0 = StyleConv(in_channels=in_channels,
+        self.conv0 = StyleConvWithNoise(in_channels=in_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
                                resolution=2**res,
                                kernel_size=3,
                                up=2,
-                               use_noise=True,
                                )
-        self.conv1 = StyleConv(in_channels=out_channels,
+        self.conv1 = StyleConvWithNoise(in_channels=out_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
                                resolution=2**res,
                                kernel_size=3,
-                               use_noise=True,
                                )
         self.toRGB = ToRGBWithSkip(in_channels=out_channels,
                            out_channels=img_channels,
@@ -714,14 +712,12 @@ class DecStyleBlock(nn.Module):
                                resolution=2**res,
                                kernel_size=3,
                                up=2,
-                               use_noise=False,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
                                resolution=2**res,
                                kernel_size=3,
-                               use_noise=False,
                                )
         self.toRGB = ToRGBWithSkip(in_channels=out_channels,
                            out_channels=img_channels,

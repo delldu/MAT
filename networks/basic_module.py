@@ -215,7 +215,6 @@ class StyleConv(torch.nn.Module):
         resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 1,            # Integer upsampling factor.
-        use_noise       = True,         # Enable noise input? True or False
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
     ):
         super().__init__()
@@ -227,15 +226,43 @@ class StyleConv(torch.nn.Module):
                                     up=up,
                                     resample_filter=resample_filter)
 
-        self.use_noise = use_noise
         self.resolution = resolution
-        if use_noise: # True | False
-            # ==> pdb.set_trace()
-            self.register_buffer('noise_const', torch.randn([resolution, resolution]))
-            self.noise_strength = nn.Parameter(torch.zeros([]))
-        else:
-            # ==> pdb.set_trace()
-            pass
+        self.bias = nn.Parameter(torch.zeros([out_channels]))
+        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
+
+
+    def forward(self, x, style, noise_mode='random', gain=1):
+        x = self.conv(x, style)
+
+        act_gain = self.act_gain * gain
+        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
+
+        return out
+
+
+@persistence.persistent_class
+class StyleConvWithNoise(torch.nn.Module):
+    def __init__(self,
+        in_channels,                    # Number of input channels.
+        out_channels,                   # Number of output channels.
+        style_dim,                      # Intermediate latent (W) dimensionality.
+        resolution,                     # Resolution of this layer.
+        kernel_size     = 3,            # Convolution kernel size.
+        up              = 1,            # Integer upsampling factor.
+        resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
+    ):
+        super().__init__()
+
+        self.conv = ModulatedConv2dDemodulate(in_channels=in_channels,
+                                    out_channels=out_channels,
+                                    kernel_size=kernel_size,
+                                    style_dim=style_dim,
+                                    up=up,
+                                    resample_filter=resample_filter)
+
+        self.resolution = resolution
+        self.register_buffer('noise_const', torch.randn([resolution, resolution]))
+        self.noise_strength = nn.Parameter(torch.zeros([]))
 
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
@@ -246,22 +273,19 @@ class StyleConv(torch.nn.Module):
 
         assert noise_mode in ['random', 'const', 'none']
 
-        if self.use_noise: # True | False
-            if noise_mode == 'random':
-                xh, xw = x.size()[-2:]
-                noise = torch.randn([x.shape[0], 1, xh, xw], device=x.device) \
-                        * self.noise_strength
-            if noise_mode == 'const':
-                noise = self.noise_const * self.noise_strength
-            x = x + noise
-        else:
-            # ==> pdb.set_trace()
-            pass
+        if noise_mode == 'random':
+            xh, xw = x.size()[-2:]
+            noise = torch.randn([x.shape[0], 1, xh, xw], device=x.device) \
+                    * self.noise_strength
+        if noise_mode == 'const':
+            noise = self.noise_const * self.noise_strength
+        x = x + noise
 
         act_gain = self.act_gain * gain
         out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
 
         return out
+
 
 #----------------------------------------------------------------------------
 @persistence.persistent_class
