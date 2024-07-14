@@ -20,46 +20,71 @@ def normalize_2nd_moment(x, dim=1, eps=1e-8):
     return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
 
 #----------------------------------------------------------------------------
-# xxxx_debug
+@persistence.persistent_class
+class MappingNetFC(nn.Module):
+    def __init__(self,
+                 in_features = 180,          # Number of input features.
+                 out_features = 180,         # Number of output features.
+                 bias_init       = 0,        # Initial value for the additive bias.
+                 ):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn([out_features, in_features]) / 0.01)
+        self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
+        self.weight_gain = 0.01 / np.sqrt(in_features)
+        self.bias_gain = 0.01
+
+    def forward(self, x):
+        w = self.weight * self.weight_gain
+        b = self.bias
+        b = b * self.bias_gain
+
+        x = x.matmul(w.t())
+        out = bias_act.bias_act(x, b, act='lrelu', dim=x.ndim-1)
+        return out
+
+@persistence.persistent_class
+class LinearFC(nn.Module):
+    def __init__(self,
+                 in_features = 180,          # Number of input features.
+                 out_features = 180,         # Number of output features.
+                 activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
+                 bias_init       = 0,        # Initial value for the additive bias.
+                 ):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn([out_features, in_features]))
+        self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
+        self.activation = activation
+        self.weight_gain = 1.0 / np.sqrt(in_features)
+
+    def forward(self, x):
+        w = self.weight * self.weight_gain
+        b = self.bias
+        x = x.matmul(w.t())
+        out = x + b.reshape([-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
+        return out
+
+
+
 @persistence.persistent_class
 class FullyConnectedLayer(nn.Module):
     def __init__(self,
                  in_features = 180,          # Number of input features.
                  out_features = 180,         # Number of output features.
-                 bias            = True,     # Apply additive bias before the activation function?
-                 activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
-                 lr_multiplier   = 1,        # Learning rate multiplier.
                  bias_init       = 0,        # Initial value for the additive bias.
                  ):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.randn([out_features, in_features]) / lr_multiplier)
-        self.bias = torch.nn.Parameter(torch.full([out_features], np.float32(bias_init))) if bias else None
-        self.activation = activation
-
-        self.weight_gain = lr_multiplier / np.sqrt(in_features)
-        self.bias_gain = lr_multiplier
+        self.weight = nn.Parameter(torch.randn([out_features, in_features]))
+        self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
+        self.weight_gain = 1.0 / np.sqrt(in_features)
 
     def forward(self, x):
         w = self.weight * self.weight_gain
         b = self.bias
-        if b is not None and self.bias_gain != 1: # False for self.bias_gain === 1, True for self.bias_gain === 0.01
-            # ==> pdb.set_trace()
-            b = b * self.bias_gain
-        else:
-            # ==> pdb.set_trace()
-            pass
 
-        if self.activation == 'linear' and b is not None:
-            # ==> pdb.set_trace() for self.activation === 'linear'
-            # out = torch.addmm(b.unsqueeze(0), x, w.t())
-            x = x.matmul(w.t())
-            out = x + b.reshape([-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
-        else:
-            # ==> pdb.set_trace()
-            # self.activation -- 'lrelu'
-            x = x.matmul(w.t())
-            out = bias_act.bias_act(x, b, act=self.activation, dim=x.ndim-1)
+        x = x.matmul(w.t())
+        out = bias_act.bias_act(x, b, act='lrelu', dim=x.ndim-1)
         return out
+
 
 #----------------------------------------------------------------------------
 
@@ -86,8 +111,8 @@ class Conv2dLayer(nn.Module):
 
         weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size])
         bias = torch.zeros([out_channels]) if bias else None
-        self.weight = torch.nn.Parameter(weight)
-        self.bias = torch.nn.Parameter(bias) if bias is not None else None
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias) if bias is not None else None
 
     def forward(self, x, gain=1):
         w = self.weight * self.weight_gain
@@ -116,7 +141,7 @@ class ModulatedConv2d(nn.Module):
         super().__init__()
         self.demodulate = demodulate # True | False
 
-        self.weight = torch.nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
+        self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
@@ -125,7 +150,7 @@ class ModulatedConv2d(nn.Module):
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
 
-        self.affine = FullyConnectedLayer(style_dim, in_channels, bias_init=1)
+        self.affine = LinearFC(style_dim, in_channels, bias_init=1)
 
     def forward(self, x, style):
         batch, in_channels, height, width = x.shape
@@ -177,12 +202,12 @@ class StyleConv(torch.nn.Module):
         if use_noise: # True | False
             # ==> pdb.set_trace()
             self.register_buffer('noise_const', torch.randn([resolution, resolution]))
-            self.noise_strength = torch.nn.Parameter(torch.zeros([]))
+            self.noise_strength = nn.Parameter(torch.zeros([]))
         else:
             # ==> pdb.set_trace()
             pass
 
-        self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
+        self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
 
 
@@ -227,7 +252,7 @@ class ToRGB(torch.nn.Module):
                                     style_dim=style_dim,
                                     demodulate=False,
                                     resample_filter=resample_filter)
-        self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
+        self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
 
@@ -283,7 +308,7 @@ class MappingNet(torch.nn.Module):
         for idx in range(num_layers): # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = FullyConnectedLayer(in_features, out_features, activation='lrelu', lr_multiplier=0.01)
+            layer = MappingNetFC(in_features, out_features)
             setattr(self, f'fc{idx}', layer)
 
         self.register_buffer('w_avg', torch.zeros([w_dim]))

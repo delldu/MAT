@@ -12,6 +12,8 @@ from timm.models.layers import to_2tuple
 from torch_utils import misc
 from torch_utils import persistence
 from networks.basic_module import (
+    MappingNetFC,
+    LinearFC,
     FullyConnectedLayer, 
     Conv2dLayer, 
     MappingNet, 
@@ -34,8 +36,8 @@ class Mlp(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = FullyConnectedLayer(in_features=in_features, out_features=hidden_features, activation='lrelu')
-        self.fc2 = FullyConnectedLayer(in_features=hidden_features, out_features=out_features)
+        self.fc1 = FullyConnectedLayer(in_features=in_features, out_features=hidden_features)
+        self.fc2 = LinearFC(in_features=hidden_features, out_features=out_features)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -119,10 +121,10 @@ class WindowAttention(nn.Module):
         head_dim = dim // num_heads
         self.scale = head_dim ** -0.5
 
-        self.q = FullyConnectedLayer(in_features=dim, out_features=dim)
-        self.k = FullyConnectedLayer(in_features=dim, out_features=dim)
-        self.v = FullyConnectedLayer(in_features=dim, out_features=dim)
-        self.proj = FullyConnectedLayer(in_features=dim, out_features=dim)
+        self.q = LinearFC(in_features=dim, out_features=dim)
+        self.k = LinearFC(in_features=dim, out_features=dim)
+        self.v = LinearFC(in_features=dim, out_features=dim)
+        self.proj = LinearFC(in_features=dim, out_features=dim)
 
         self.softmax = nn.Softmax(dim=-1)
 
@@ -206,7 +208,7 @@ class SwinTransformerBlock(nn.Module):
                                     down_ratio=down_ratio, attn_drop=attn_drop,
                                     proj_drop=drop)
 
-        self.fuse = FullyConnectedLayer(in_features=dim * 2, out_features=dim, activation='lrelu')
+        self.fuse = FullyConnectedLayer(in_features=dim * 2, out_features=dim)
 
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
@@ -572,9 +574,7 @@ class ToStyle(nn.Module):
                 )
 
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = FullyConnectedLayer(in_features=in_channels,
-                                      out_features=out_channels,
-                                      activation='lrelu')
+        self.fc = FullyConnectedLayer(in_features=in_channels, out_features=out_channels)
         # pdb.set_trace()
     def forward(self, x):
         # tensor [x] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
@@ -788,9 +788,9 @@ class FirstStage(nn.Module):
             down_conv.append(Conv2dLayer(in_channels=dim, out_channels=dim, kernel_size=3, down=2))
         down_conv.append(nn.AdaptiveAvgPool2d((1, 1)))
         self.down_conv = nn.Sequential(*down_conv)
-        self.to_style = FullyConnectedLayer(in_features=dim, out_features=dim*2, activation='lrelu')
-        self.ws_style = FullyConnectedLayer(in_features=w_dim, out_features=dim, activation='lrelu')
-        self.to_square = FullyConnectedLayer(in_features=dim, out_features=16*16, activation='lrelu')
+        self.to_style = FullyConnectedLayer(in_features=dim, out_features=dim*2)
+        self.ws_style = FullyConnectedLayer(in_features=w_dim, out_features=dim)
+        self.to_square = FullyConnectedLayer(in_features=dim, out_features=16*16)
 
         style_dim = dim * 3
         self.dec_conv = nn.ModuleList()
@@ -870,7 +870,7 @@ class SynthesisNet(nn.Module):
 
         # second stage
         self.enc = Encoder(resolution_log2, img_channels, patch_size=5, channels=16)
-        self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16, activation='lrelu')
+        self.to_square = FullyConnectedLayer(in_features=w_dim, out_features=16*16)
         self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2)
         style_dim = w_dim + nf(2) * 2 # ==> 1536
         self.dec = Decoder(resolution_log2, style_dim, img_channels)

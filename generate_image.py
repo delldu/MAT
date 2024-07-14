@@ -106,12 +106,14 @@ def generate_images(
     # no Labels.
     # label = torch.zeros([1, G.c_dim], device=device)
 
-    def read_image(image_path):
-        with open(image_path, 'rb') as f:
-            if pyspng is not None and image_path.endswith('.png'):
-                image = pyspng.load(f.read())
-            else:
-                image = np.array(PIL.Image.open(f))
+    def read_image(image_path, resolution):
+        # with open(image_path, 'rb') as f:
+        #     if pyspng is not None and image_path.endswith('.png'):
+        #         image = pyspng.load(f.read())
+        #     else:
+        #         image = np.array(PIL.Image.open(f))
+        image = np.array(PIL.Image.open(image_path))
+
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
             image = np.repeat(image, 3, axis=2)
@@ -140,7 +142,7 @@ def generate_images(
         for i, ipath in enumerate(img_list):
             iname = os.path.basename(ipath).replace('.jpg', '.png')
             print(f'Prcessing: {iname}')
-            image = read_image(ipath)
+            image = read_image(ipath, resolution)
             image = (torch.from_numpy(image).float().to(device) / 127.5 - 1).unsqueeze(0)
 
             if mpath is not None:
