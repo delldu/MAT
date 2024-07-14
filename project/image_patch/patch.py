@@ -19,12 +19,10 @@ def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
 
 
 class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None):
+    def __init__(self, in_features, hidden_features):
         super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
         self.fc1 = FullyConnectedLayer(in_features=in_features, out_features=hidden_features)
-        self.fc2 = LinearFC(in_features=hidden_features, out_features=out_features)
+        self.fc2 = LinearFC(in_features=hidden_features, out_features=in_features)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -62,10 +60,10 @@ class Conv2dLayerPartial(nn.Module):
         self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, up, down)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
+        # self.weight_maskUpdater.size() -- [1, 1, 3, 3]
         self.slide_winsize = kernel_size ** 2
         self.stride = down
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
-        # self.weight_maskUpdater.size() -- [1, 1, 3, 3]
         #  self.slide_winsize -- 9
 
     def forward(self, x, mask=None):
@@ -873,9 +871,9 @@ class Generator(nn.Module):
         images_in = (images_in - 0.5) * 2.0
         #images_in, masks_in, z
 
-        todos.debug.output_var("images_in", images_in)
-        todos.debug.output_var("masks_in", masks_in)
-        todos.debug.output_var("z", z)
+        # todos.debug.output_var("images_in", images_in)
+        # todos.debug.output_var("masks_in", masks_in)
+        # todos.debug.output_var("z", z)
 
         ws = self.mapping(z)
 
@@ -1240,17 +1238,13 @@ class MappingNet(torch.nn.Module):
         return x
 
 
-def _get_weight_shape(w):
-    shape = [int(sz) for sz in w.shape]
-    return shape
-
 #----------------------------------------------------------------------------
 
 def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True):
     """Wrapper for the underlying `conv2d()` and `conv_transpose2d()` implementations.
     """
     # print(f"_conv2d_wrapper groups={groups}, flip_weight={flip_weight}")
-    out_channels, in_channels_per_group, kh, kw = _get_weight_shape(w)
+    out_channels, in_channels_per_group, kh, kw = w.size()
 
     # Flip weight if requested.
     if not flip_weight: # conv2d() actually performs correlation (flip_weight=True) not convolution (flip_weight=False).
@@ -1259,23 +1253,6 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
     else:
         # ==> pdb.set_trace()
         pass
-
-    # Workaround performance pitfall in cuDNN 8.0.5, triggered when using
-    # 1x1 kernel + memory_format=channels_last + less than 64 channels.
-    if kw == 1 and kh == 1 and stride == 1 and padding in [0, [0, 0], (0, 0)] and not transpose:
-        # _get_weight_shape(w) -- [3, 180, 1, 1]
-        if x.stride()[1] == 1 and min(out_channels, in_channels_per_group) < 64:
-            pdb.set_trace()
-
-            if out_channels <= 4 and groups == 1:
-                in_shape = x.shape
-                x = w.squeeze(3).squeeze(2) @ x.reshape([in_shape[0], in_channels_per_group, -1])
-                x = x.reshape([in_shape[0], out_channels, in_shape[2], in_shape[3]])
-            else:
-                x = x.to(memory_format=torch.contiguous_format)
-                w = w.to(memory_format=torch.contiguous_format)
-                x = gradfix_conv2d(x, w, groups=groups)
-            return x.to(memory_format=torch.channels_last)
 
     # transpose == True | False
     op = gradfix_conv_transpose2d if transpose else gradfix_conv2d
@@ -1300,8 +1277,8 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     assert f is None or (isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32)
     assert isinstance(up, int) and (up >= 1)
     assert isinstance(down, int) and (down >= 1)
-    out_channels, in_channels_per_group, kh, kw = _get_weight_shape(w)
-    fw, fh = _get_filter_size(f)
+    out_channels, in_channels_per_group, kh, kw = w.size()
+    fw, fh = f.size()
     # fw === 4, fh === 4
     px0, px1, py0, py1 = _parse_padding(padding)
 
@@ -1321,8 +1298,7 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
     if kw == 1 and kh == 1 and (down > 1 and up == 1):
         pdb.set_trace()
-        x = upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1], 
-            flip_filter=False)
+        x = upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1])
         x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
         return x
 
@@ -1331,26 +1307,17 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         pdb.set_trace()
 
         x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-        x = upfirdn2d(x=x, f=f, up=up, padding=[px0,px1,py0,py1], gain=up**2, 
-            flip_filter=False)
+        x = upfirdn2d(x=x, f=f, up=up, padding=[px0,px1,py0,py1], gain=up**2)
         return x
 
     # Fast path: downsampling only => use strided convolution.
     if down > 1 and up == 1:
-        x = upfirdn2d(x=x, f=f, padding=[px0,px1,py0,py1], flip_filter=False)
+        x = upfirdn2d(x=x, f=f, padding=[px0,px1,py0,py1])
         x = _conv2d_wrapper(x=x, w=w, stride=down, groups=1, flip_weight=True)
         return x
 
     # Fast path: upsampling with optional downsampling => use transpose strided convolution.
     if up > 1:
-        # up == 2 ==> pdb.set_trace()
-        # if groups == 1:
-        #     w = w.transpose(0, 1)
-        # else:
-        #     pdb.set_trace()
-        #     w = w.reshape(groups, out_channels // groups, in_channels_per_group, kh, kw)
-        #     w = w.transpose(1, 2)
-        #     w = w.reshape(groups * in_channels_per_group, out_channels // groups, kh, kw)
         w = w.transpose(0, 1)
 
         px0 -= kw - 1
@@ -1361,10 +1328,9 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         pyt = max(min(-py0, -py1), 0)
         x = _conv2d_wrapper(x=x, w=w, stride=up, padding=[pyt,pxt], groups=1, transpose=True, 
             flip_weight=False)
-        x = upfirdn2d(x=x, f=f, padding=[px0+pxt,px1+pxt,py0+pyt,py1+pyt], gain=up**2, 
-            flip_filter=False)
+        x = upfirdn2d(x=x, f=f, padding=[px0+pxt,px1+pxt,py0+pyt,py1+pyt], gain=up**2)
         if down > 1:
-            x = upfirdn2d(x=x, f=f, down=down, flip_filter=False)
+            x = upfirdn2d(x=x, f=f, down=down)
         return x
 
     # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
@@ -1373,11 +1339,10 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
             return _conv2d_wrapper(x=x, w=w, padding=[py0,px0], groups=1, flip_weight=True)
 
     # Fallback: Generic reference implementation.
-    x = upfirdn2d(x=x, f=(f if up > 1 else None), up=up, padding=[px0,px1,py0,py1], 
-        gain=up**2, flip_filter=False)
+    x = upfirdn2d(x=x, f=(f if up > 1 else None), up=up, padding=[px0,px1,py0,py1], gain=up**2)
     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
     if down > 1:
-        x = upfirdn2d(x=x, f=f, down=down, flip_filter=False)
+        x = upfirdn2d(x=x, f=f, down=down)
     return x
 
 
@@ -1398,66 +1363,24 @@ def _parse_padding(padding):
     if len(padding) == 2:
         padx, pady = padding
         padding = [padx, padx, pady, pady]
+    else:
+        # [2, 2, 2, 2]
+        # ==> pdb.set_trace()
+        pass
+
     padx0, padx1, pady0, pady1 = padding
     return padx0, padx1, pady0, pady1
 
-def _get_filter_size(f):
-    if f is None:
-        return 1, 1
-    assert isinstance(f, torch.Tensor) and f.ndim in [1, 2]
-    fw = f.shape[-1]
-    fh = f.shape[0]
-    fw = int(fw)
-    fh = int(fh)
-    assert fw >= 1 and fh >= 1
-    return fw, fh
-
 #----------------------------------------------------------------------------
-
-def setup_filter(f, device=torch.device('cpu'), normalize=True, flip_filter=False, gain=1, separable=None):
-    r"""Convenience function to setup 2D FIR filter for `upfirdn2d()`.
-    """
-    # Validate.
-    if f is None:
-        f = 1
-        pdb.set_trace()
-
+def setup_filter(f):
     f = torch.as_tensor(f, dtype=torch.float32)
-    assert f.ndim in [0, 1, 2]
-    assert f.numel() > 0
-    if f.ndim == 0:
-        pdb.set_trace()
-        f = f[np.newaxis]
-
-    # Separable?
-    if separable is None:
-        separable = (f.ndim == 1 and f.numel() >= 8)
-    else:
-        pdb.set_trace()
-
-    if f.ndim == 1 and not separable:
-        f = f.ger(f)
-    else:
-        pdb.set_trace()
-
-    assert f.ndim == (1 if separable else 2)
-
-    # Apply normalize, flip, gain, and device.
-    if normalize: # True
-        f /= f.sum()
-    if flip_filter: # False
-        pdb.set_trace()
-        f = f.flip(list(range(f.ndim)))
-    f = f * (gain ** (f.ndim / 2))
-    f = f.to(device=device)
+    f = f.ger(f)
+    f /= f.sum()
     return f
 
 #----------------------------------------------------------------------------
-
-def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1):
+def upfirdn2d(x, f, up=1, down=1, padding=0, gain=1):
     r"""Pad, upsample, filter, and downsample a batch of 2D images.
-    """
-    """Slow reference implementation of `upfirdn2d()` using standard PyTorch ops.
     """
     assert isinstance(x, torch.Tensor) and x.ndim == 4
     if f is None:
@@ -1471,57 +1394,47 @@ def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1):
 
     # Upsample by inserting zeros.
     x = x.reshape([batch_size, num_channels, in_height, 1, in_width, 1])
-    x = torch.nn.functional.pad(x, [0, upx - 1, 0, 0, 0, upy - 1])
+    x = F.pad(x, [0, upx - 1, 0, 0, 0, upy - 1])
     x = x.reshape([batch_size, num_channels, in_height * upy, in_width * upx])
 
     # Pad or crop.
-    x = torch.nn.functional.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
+    x = F.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
     x = x[:, :, max(-pady0, 0) : x.shape[2] - max(-pady1, 0), max(-padx0, 0) : x.shape[3] - max(-padx1, 0)]
 
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
     f = f.to(x.dtype)
-    if not flip_filter: # True
-        f = f.flip(list(range(f.ndim)))
-    else:
-        pdb.set_trace()
+    f = f.flip(list(range(f.ndim)))
 
     # Convolve with the filter.
     f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim)
-    if f.ndim == 4:
-        x = gradfix_conv2d(input=x, weight=f, groups=num_channels)
-    else:
-        pdb.set_trace()
-        x = gradfix_conv2d(input=x, weight=f.unsqueeze(2), groups=num_channels)
-        x = gradfix_conv2d(input=x, weight=f.unsqueeze(3), groups=num_channels)
+    x = gradfix_conv2d(input=x, weight=f, groups=num_channels)
 
     # Downsample by throwing away pixels.
     x = x[:, :, ::downy, ::downx]
     return x
 
 
-def upsample2d(x, f, up=2, padding=0, flip_filter=False, gain=1):
+def upsample2d(x, f, up=2, padding=0, gain=1):
     r"""Upsample a batch of 2D images using the given 2D FIR filter.
     """
     upx, upy = _parse_scaling(up)
     padx0, padx1, pady0, pady1 = _parse_padding(padding)
-    fw, fh = _get_filter_size(f)
+    fw, fh = f.size()
     p = [
         padx0 + (fw + upx - 1) // 2,
         padx1 + (fw - upx) // 2,
         pady0 + (fh + upy - 1) // 2,
         pady1 + (fh - upy) // 2,
     ]
-    return upfirdn2d(x, f, up=up, padding=p, flip_filter=flip_filter, gain=gain*upx*upy)
+    return upfirdn2d(x, f, up=up, padding=p, gain=gain*upx*upy)
 
 def bias_lrelu(x, b, dim=1):
     r"""Fused bias and activation function.
      """
     assert isinstance(x, torch.Tensor)
 
-    # print("_bias_act_ref ---- ", "act=", act, "alpha=", alpha, "gain=", gain)
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
-    # act -- linear, alpha= 0.0 gain= 1.0
 
     # Add bias.
     assert isinstance(b, torch.Tensor) and b.ndim == 1
@@ -1547,8 +1460,6 @@ def bias_linear(x, b):
      """
     dim=1     
     assert isinstance(x, torch.Tensor)
-    # print("_bias_act_ref ---- ", "act=", act, "alpha=", alpha, "gain=", gain)
-    # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
     # act -- linear, alpha= 0.0 gain= 1.0
 
     # Add bias.
@@ -1564,7 +1475,9 @@ def bias_linear(x, b):
 
 # conv2d_gradfix
 def gradfix_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-    return F.conv2d(input=input, weight=weight, bias=bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return F.conv2d(input=input, weight=weight, bias=bias, stride=stride, 
+        padding=padding, dilation=dilation, groups=groups)
 
 def gradfix_conv_transpose2d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
-    return F.conv_transpose2d(input=input, weight=weight, bias=bias, stride=stride, padding=padding, output_padding=output_padding, groups=groups, dilation=dilation)
+    return F.conv_transpose2d(input=input, weight=weight, bias=bias, stride=stride, 
+        padding=padding, output_padding=output_padding, groups=groups, dilation=dilation)
