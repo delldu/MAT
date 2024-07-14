@@ -234,7 +234,6 @@ class StyleConv(torch.nn.Module):
         return out
 
 #----------------------------------------------------------------------------
-# xxxx_debug
 @persistence.persistent_class
 class ToRGB(torch.nn.Module):
     def __init__(self,
@@ -256,21 +255,43 @@ class ToRGB(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
 
-    def forward(self, x, style, skip=None):
+    def forward(self, x, style):
+        x = self.conv(x, style)
+        out = bias_act.bias_act(x, self.bias)
+        return out
+
+@persistence.persistent_class
+class ToRGBWithSkip(torch.nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 style_dim,
+                 kernel_size=1,
+                 resample_filter=[1,3,3,1],
+                ):
+        super().__init__()
+
+        self.conv = ModulatedConv2d(in_channels=in_channels,
+                                    out_channels=out_channels,
+                                    kernel_size=kernel_size,
+                                    style_dim=style_dim,
+                                    demodulate=False,
+                                    resample_filter=resample_filter)
+        self.bias = nn.Parameter(torch.zeros([out_channels]))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        #  self.resample_filter.size() -- [4, 4]
+
+    def forward(self, x, style, skip):
         x = self.conv(x, style)
         out = bias_act.bias_act(x, self.bias)
 
-        if skip is not None:
-            # ==> pdb.set_trace()
-            if skip.shape != out.shape:
-                # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
-                skip = upfirdn2d.upsample2d(skip, self.resample_filter)
-            out = out + skip
-        else:
-            # ==> pdb.set_trace()
-            pass
+        if skip.shape != out.shape:
+            # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
+            skip = upfirdn2d.upsample2d(skip, self.resample_filter)
+        out = out + skip
 
         return out
+
 
 #----------------------------------------------------------------------------
 

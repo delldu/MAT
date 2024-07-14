@@ -19,6 +19,7 @@ from networks.basic_module import (
     MappingNet, 
     StyleConv, 
     ToRGB, 
+    ToRGBWithSkip,
     get_style_code,
 )
 import todos
@@ -575,7 +576,7 @@ class ToStyle(nn.Module):
 
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = FullyConnectedLayer(in_features=in_channels, out_features=out_channels)
-        # pdb.set_trace()
+
     def forward(self, x):
         # tensor [x] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
         x = self.conv(x)
@@ -610,7 +611,6 @@ class DecBlockFirstV2(nn.Module):
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
                            style_dim=style_dim,
-                           kernel_size=1,
                            )
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
@@ -631,7 +631,7 @@ class DecBlockFirstV2(nn.Module):
         style = get_style_code(ws[:, 0], gs) # ws[:, 0].size() -- [1, 512]
         x = self.conv1(x, style, noise_mode=noise_mode)
         style = get_style_code(ws[:, 1], gs)
-        img = self.toRGB(x, style, skip=None)
+        img = self.toRGB(x, style)
 
         # tensor [x] size: [1, 512, 16, 16], min: -14.745468, max: 52.303444, mean: -0.170848
         # tensor [img] size: [1, 3, 16, 16], min: -0.003557, max: 0.002705, mean: -0.000736
@@ -659,10 +659,9 @@ class DecBlock(nn.Module):
                                kernel_size=3,
                                use_noise=True,
                                )
-        self.toRGB = ToRGB(in_channels=out_channels,
+        self.toRGB = ToRGBWithSkip(in_channels=out_channels,
                            out_channels=img_channels,
                            style_dim=style_dim,
-                           kernel_size=1,
                            )
 
     def forward(self, x, img, ws, gs, e_features, noise_mode='random'):
@@ -727,7 +726,6 @@ class DecStyleBlock(nn.Module):
         self.toRGB = ToRGB(in_channels=out_channels,
                            out_channels=img_channels,
                            style_dim=style_dim,
-                           kernel_size=1,
                            )
 
     def forward(self, x, img, style, skip, noise_mode='random'):
