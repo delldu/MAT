@@ -39,7 +39,7 @@ class MappingNetFC(nn.Module):
         b = b * self.bias_gain
 
         x = x.matmul(w.t())
-        out = bias_act.bias_act(x, b, act='lrelu', dim=x.ndim-1)
+        out = bias_act.bias_lrelu(x, b, dim=x.ndim-1)
         return out
 
 @persistence.persistent_class
@@ -82,7 +82,7 @@ class FullyConnectedLayer(nn.Module):
         b = self.bias
 
         x = x.matmul(w.t())
-        out = bias_act.bias_act(x, b, act='lrelu', dim=x.ndim-1)
+        out = bias_act.bias_lrelu(x, b, dim=x.ndim-1)
         return out
 
 
@@ -100,14 +100,13 @@ class Conv2dLayer(nn.Module):
                  resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
-
         self.up = up
         self.down = down
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
             
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
-        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
+        self.act_gain = 1.4142135623730951 # bias_act.activation_funcs['lrelu'].def_gain
 
         weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size])
         bias = torch.zeros([out_channels]) if bias else None
@@ -116,12 +115,10 @@ class Conv2dLayer(nn.Module):
 
     def forward(self, x, gain=1):
         w = self.weight * self.weight_gain
-        x = conv2d_resample.conv2d_resample(x=x, w=w, f=self.resample_filter, up=self.up, down=self.down,
-                                            padding=self.padding)
-
+        x = conv2d_resample.conv2d_resample(x=x, w=w, f=self.resample_filter, 
+                up=self.up, down=self.down, padding=self.padding)
         act_gain = self.act_gain * gain
-
-        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
+        out = bias_act.bias_lrelu(x, self.bias)
         return out
 
 #----------------------------------------------------------------------------
@@ -137,7 +134,6 @@ class ModulatedConv2d(nn.Module):
                  resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
-
         self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -156,8 +152,8 @@ class ModulatedConv2d(nn.Module):
 
         weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
         x = x.view(1, batch * in_channels, height, width)
-        x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, up=self.up, down=self.down,
-                                            padding=self.padding, groups=batch)
+        x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, 
+            up=self.up, down=self.down, padding=self.padding, groups=batch)
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -205,37 +201,34 @@ class ModulatedConv2dDemodulate(nn.Module):
 
 
 #----------------------------------------------------------------------------
-# xxxx_debug
 @persistence.persistent_class
 class StyleConv(torch.nn.Module):
     def __init__(self,
         in_channels,                    # Number of input channels.
         out_channels,                   # Number of output channels.
         style_dim,                      # Intermediate latent (W) dimensionality.
-        resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 1,            # Integer upsampling factor.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
     ):
         super().__init__()
-
-        self.conv = ModulatedConv2dDemodulate(in_channels=in_channels,
-                                    out_channels=out_channels,
-                                    kernel_size=kernel_size,
-                                    style_dim=style_dim,
-                                    up=up,
-                                    resample_filter=resample_filter)
-
-        self.resolution = resolution
+        self.conv = ModulatedConv2dDemodulate(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        style_dim=style_dim,
+                        up=up,
+                        resample_filter=resample_filter,
+                    )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
+        self.act_gain = 1.4142135623730951 #bias_act.activation_funcs['lrelu'].def_gain
 
 
     def forward(self, x, style, noise_mode='random', gain=1):
         x = self.conv(x, style)
 
         act_gain = self.act_gain * gain
-        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
+        out = bias_act.bias_lrelu(x, self.bias)
 
         return out
 
@@ -253,19 +246,21 @@ class StyleConvWithNoise(torch.nn.Module):
     ):
         super().__init__()
 
-        self.conv = ModulatedConv2dDemodulate(in_channels=in_channels,
-                                    out_channels=out_channels,
-                                    kernel_size=kernel_size,
-                                    style_dim=style_dim,
-                                    up=up,
-                                    resample_filter=resample_filter)
+        self.conv = ModulatedConv2dDemodulate(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        style_dim=style_dim,
+                        up=up,
+                        resample_filter=resample_filter,
+                    )
 
         self.resolution = resolution
         self.register_buffer('noise_const', torch.randn([resolution, resolution]))
         self.noise_strength = nn.Parameter(torch.zeros([]))
 
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.act_gain = bias_act.activation_funcs['lrelu'].def_gain
+        self.act_gain = 1.4142135623730951 #bias_act.activation_funcs['lrelu'].def_gain
 
 
     def forward(self, x, style, noise_mode='random', gain=1):
@@ -282,7 +277,7 @@ class StyleConvWithNoise(torch.nn.Module):
         x = x + noise
 
         act_gain = self.act_gain * gain
-        out = bias_act.bias_act(x, self.bias, act='lrelu', gain=act_gain)
+        out = bias_act.bias_lrelu(x, self.bias)
 
         return out
 
@@ -299,18 +294,20 @@ class ToRGB(torch.nn.Module):
                 ):
         super().__init__()
 
-        self.conv = ModulatedConv2d(in_channels=in_channels,
-                                    out_channels=out_channels,
-                                    kernel_size=kernel_size,
-                                    style_dim=style_dim,
-                                    resample_filter=resample_filter)
+        self.conv = ModulatedConv2d(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        style_dim=style_dim,
+                        resample_filter=resample_filter,
+                    )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
 
     def forward(self, x, style, skip=None):
         x = self.conv(x, style)
-        out = bias_act.bias_act(x, self.bias)
+        out = bias_act.bias_linear(x, self.bias)
         return out
 
 # xxxx_debug
@@ -325,18 +322,20 @@ class ToRGBWithSkip(torch.nn.Module):
                 ):
         super().__init__()
 
-        self.conv = ModulatedConv2d(in_channels=in_channels,
-                                    out_channels=out_channels,
-                                    kernel_size=kernel_size,
-                                    style_dim=style_dim,
-                                    resample_filter=resample_filter)
+        self.conv = ModulatedConv2d(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        style_dim=style_dim,
+                        resample_filter=resample_filter,
+                    )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         #  self.resample_filter.size() -- [4, 4]
 
     def forward(self, x, style, skip):
         x = self.conv(x, style)
-        out = bias_act.bias_act(x, self.bias)
+        out = bias_act.bias_linear(x, self.bias)
 
         if skip is not None:
             if skip.shape != out.shape:

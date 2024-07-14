@@ -34,7 +34,7 @@ def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
 
 @persistence.persistent_class
 class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -114,7 +114,7 @@ class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
     """
 
-    def __init__(self, dim, window_size, num_heads, down_ratio=1, attn_drop=0., proj_drop=0.):
+    def __init__(self, dim, window_size, num_heads, down_ratio=1):
 
         super().__init__()
         # self.dim = dim
@@ -175,7 +175,7 @@ class SwinTransformerBlock(nn.Module):
     """
 
     def __init__(self, dim, input_resolution, num_heads, down_ratio=1, window_size=7, shift_size=0,
-                 mlp_ratio=4., drop=0., attn_drop=0., drop_path=0.,
+                 mlp_ratio=4.,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
         # dim = 180
@@ -185,9 +185,6 @@ class SwinTransformerBlock(nn.Module):
         # window_size = 8
         # shift_size = 0
         # mlp_ratio = 2.0
-        # drop = 0.0
-        # attn_drop = 0.0
-        # drop_path = 0.0
         # act_layer = <class 'torch.nn.modules.activation.GELU'>
         # norm_layer = <class 'torch.nn.modules.normalization.LayerNorm'>
 
@@ -207,13 +204,12 @@ class SwinTransformerBlock(nn.Module):
         if self.shift_size > 0:
             down_ratio = 1
         self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
-                                    down_ratio=down_ratio, attn_drop=attn_drop,
-                                    proj_drop=drop)
+                                    down_ratio=down_ratio)
 
         self.fuse = FullyConnectedLayer(in_features=dim * 2, out_features=dim)
 
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer)
 
         if self.shift_size > 0:
             # ==> pdb.set_trace()
@@ -340,11 +336,8 @@ class PatchMerging(nn.Module):
             pass
 
         x, mask = self.conv(x, mask)
-        if self.down != 1:
-            ratio = 1 / self.down
-            x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
-        else:
-            pdb.set_trace()
+        ratio = 1 / self.down
+        x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
 
         x = feature2token(x)
         if mask is not None:
@@ -376,8 +369,7 @@ class PatchUpsampling(nn.Module):
             pass
 
         x, mask = self.conv(x, mask)
-        if self.up != 1:
-            x_size = (int(x_size[0] * self.up), int(x_size[1] * self.up))
+        x_size = (int(x_size[0] * self.up), int(x_size[1] * self.up))
         x = feature2token(x)
         if mask is not None:
             mask = feature2token(mask)
@@ -395,8 +387,7 @@ class BasicLayer(nn.Module):
     """
 
     def __init__(self, dim, input_resolution, depth, num_heads, window_size, down_ratio=1,
-                 mlp_ratio=2., drop=0., attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None):
+                 mlp_ratio=2., norm_layer=nn.LayerNorm, downsample=None):
 
         super().__init__()
         # dim = 180
@@ -406,9 +397,6 @@ class BasicLayer(nn.Module):
         # window_size = 8
         # down_ratio = 1
         # mlp_ratio = 2.0
-        # drop = 0.0
-        # attn_drop = 0.0
-        # drop_path = [0.0, 0.007692307699471712]
         # norm_layer = <class 'torch.nn.modules.normalization.LayerNorm'>
         # downsample = None
 
@@ -430,8 +418,6 @@ class BasicLayer(nn.Module):
                                  num_heads=num_heads, down_ratio=down_ratio, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
                                  mlp_ratio=mlp_ratio,
-                                 drop=drop, attn_drop=attn_drop,
-                                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                                  norm_layer=norm_layer)
             for i in range(depth)]) # depth === 2
 
@@ -529,14 +515,12 @@ class Encoder(nn.Module):
         res_log2 = 9, 
         img_channels = 3, 
         patch_size=5, 
-        channels=16, 
-        drop_path_rate=0.1):
+        channels=16):
         super().__init__()
         # res_log2 = 9
         # img_channels = 3
         # patch_size = 5
         # channels = 16
-        # drop_path_rate = 0.1
 
         self.resolution = []
         # range(res_log2, 3, -1) -- [9, 8, 7, 6, 5, 4]
@@ -688,9 +672,9 @@ class Decoder(nn.Module):
             setattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res),
                     DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels))
         self.res_log2 = res_log2 # 9
+        pdb.set_trace()
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
-        print("Decoder forward noise_mode: ", noise_mode)
 
         x, img = self.Dec_16x16(x, ws, gs, e_features, noise_mode=noise_mode)
         for res in range(5, self.res_log2 + 1):
@@ -709,14 +693,12 @@ class DecStyleBlock(nn.Module):
         self.conv0 = StyleConv(in_channels=in_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
-                               resolution=2**res,
                                kernel_size=3,
                                up=2,
                                )
         self.conv1 = StyleConv(in_channels=out_channels,
                                out_channels=out_channels,
                                style_dim=style_dim,
-                               resolution=2**res,
                                kernel_size=3,
                                )
         self.toRGB = ToRGBWithSkip(in_channels=out_channels,
@@ -740,7 +722,6 @@ class FirstStage(nn.Module):
         img_resolution=512, 
         dim=180, 
         w_dim=512, 
-        # demodulate=True, 
     ):
         super().__init__()
         res = 64
@@ -758,8 +739,6 @@ class FirstStage(nn.Module):
         ratios = [1, 1/2, 1/2, 2, 2]
         num_heads = 6
         window_sizes = [8, 16, 16, 16, 8]
-        drop_path_rate = 0.1
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
 
         self.tran = nn.ModuleList()
         for i, depth in enumerate(depths):
@@ -772,7 +751,7 @@ class FirstStage(nn.Module):
                 merge = None # ==> ratios[i] === 1
             self.tran.append(
                 BasicLayer(dim=dim, input_resolution=[res, res], depth=depth, num_heads=num_heads,
-                           window_size=window_sizes[i], drop_path=dpr[sum(depths[:i]):sum(depths[:i + 1])],
+                           window_size=window_sizes[i], 
                            downsample=merge)
             )
 
@@ -791,6 +770,7 @@ class FirstStage(nn.Module):
         for i in range(down_time):  # down_time == 3, from 64 to input size
             res = res * 2
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
+        pdb.set_trace()
 
     def forward(self, images_in, masks_in, ws, noise_mode='random'):
         x = torch.cat([masks_in - 0.5, images_in * masks_in], dim=1)
