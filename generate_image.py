@@ -162,7 +162,7 @@ def generate_images(
             todos.debug.output_var("truncation_psi", truncation_psi)
 
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            output = G(image, mask, z, noise_mode=noise_mode) #, label, truncation_psi=truncation_psi)
+            output = G(image, mask, z) # noise_mode=noise_mode, label, truncation_psi=truncation_psi)
             todos.debug.output_var("output", output)
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

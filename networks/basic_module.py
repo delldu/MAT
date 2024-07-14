@@ -25,9 +25,9 @@ class MappingNetFC(nn.Module):
     def __init__(self,
                  in_features = 180,          # Number of input features.
                  out_features = 180,         # Number of output features.
-                 bias_init       = 0,        # Initial value for the additive bias.
                  ):
         super().__init__()
+        bias_init = 0 # Initial value for the additive bias.
         self.weight = nn.Parameter(torch.randn([out_features, in_features]) / 0.01)
         self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
         self.weight_gain = 0.01 / np.sqrt(in_features)
@@ -47,30 +47,27 @@ class LinearFC(nn.Module):
     def __init__(self,
                  in_features = 180,          # Number of input features.
                  out_features = 180,         # Number of output features.
-                 activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
-                 bias_init       = 0,        # Initial value for the additive bias.
+                 bias_init = 0,        # Initial value for the additive bias.
                  ):
         super().__init__()
         self.weight = nn.Parameter(torch.randn([out_features, in_features]))
         self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
-        self.activation = activation
         self.weight_gain = 1.0 / np.sqrt(in_features)
 
     def forward(self, x):
         w = self.weight * self.weight_gain
         b = self.bias
         x = x.matmul(w.t())
+        # print("LinearFC reshape: ", [-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
         out = x + b.reshape([-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
         return out
-
-
 
 @persistence.persistent_class
 class FullyConnectedLayer(nn.Module):
     def __init__(self,
                  in_features = 180,          # Number of input features.
                  out_features = 180,         # Number of output features.
-                 bias_init       = 0,        # Initial value for the additive bias.
+                 bias_init = 0,        # Initial value for the additive bias.
                  ):
         super().__init__()
         self.weight = nn.Parameter(torch.randn([out_features, in_features]))
@@ -224,7 +221,7 @@ class StyleConv(torch.nn.Module):
         self.act_gain = 1.4142135623730951 #bias_act.activation_funcs['lrelu'].def_gain
 
 
-    def forward(self, x, style, noise_mode='random', gain=1):
+    def forward(self, x, style, gain=1):
         x = self.conv(x, style)
 
         act_gain = self.act_gain * gain
@@ -263,17 +260,10 @@ class StyleConvWithNoise(torch.nn.Module):
         self.act_gain = 1.4142135623730951 #bias_act.activation_funcs['lrelu'].def_gain
 
 
-    def forward(self, x, style, noise_mode='random', gain=1):
+    def forward(self, x, style, gain=1):
         x = self.conv(x, style)
 
-        assert noise_mode in ['random', 'const', 'none']
-
-        if noise_mode == 'random':
-            xh, xw = x.size()[-2:]
-            noise = torch.randn([x.shape[0], 1, xh, xw], device=x.device) \
-                    * self.noise_strength
-        if noise_mode == 'const':
-            noise = self.noise_const * self.noise_strength
+        noise = self.noise_const * self.noise_strength
         x = x + noise
 
         act_gain = self.act_gain * gain
@@ -337,12 +327,12 @@ class ToRGBWithSkip(torch.nn.Module):
         x = self.conv(x, style)
         out = bias_act.bias_linear(x, self.bias)
 
+        # pdb.set_trace()
         if skip is not None:
             if skip.shape != out.shape:
                 # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
                 skip = upfirdn2d.upsample2d(skip, self.resample_filter)
             out = out + skip
-
         return out
 
 

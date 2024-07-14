@@ -597,7 +597,7 @@ class DecBlockFirstV2(nn.Module):
                            style_dim=style_dim,
                            )
 
-    def forward(self, x, ws, gs, e_features, noise_mode='random'):
+    def forward(self, x, ws, gs, e_features):
         # tensor [x] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
         # tensor [ws] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
         # tensor [gs] size: [1, 1024], min: -0.370284, max: 0.784699, mean: 0.005559
@@ -608,12 +608,11 @@ class DecBlockFirstV2(nn.Module):
         #     tensor [6] size: [1, 512, 64, 64], min: -15.623693, max: 53.609097, mean: 0.082812
         #     tensor [5] size: [1, 512, 32, 32], min: -15.83503, max: 75.104073, mean: -0.047926
         #     tensor [4] size: [1, 512, 16, 16], min: -10.228478, max: 40.67131, mean: 0.077602
-        # noise_mode -- "const"
         # x = self.fc(x).view(x.shape[0], -1, 4, 4)
         x = self.conv0(x)
         x = x + e_features[self.res] # self.res === 4
         style = get_style_code(ws[:, 0], gs) # ws[:, 0].size() -- [1, 512]
-        x = self.conv1(x, style, noise_mode=noise_mode)
+        x = self.conv1(x, style)
         style = get_style_code(ws[:, 1], gs)
         img = self.toRGB(x, style, skip=None)
 
@@ -646,12 +645,12 @@ class DecBlock(nn.Module):
                            style_dim=style_dim,
                            )
 
-    def forward(self, x, img, ws, gs, e_features, noise_mode='random'):
+    def forward(self, x, img, ws, gs, e_features):
         style = get_style_code(ws[:, self.res * 2 - 9], gs)
-        x = self.conv0(x, style, noise_mode=noise_mode)
+        x = self.conv0(x, style)
         x = x + e_features[self.res]
         style = get_style_code(ws[:, self.res * 2 - 8], gs)
-        x = self.conv1(x, style, noise_mode=noise_mode)
+        x = self.conv1(x, style)
         style = get_style_code(ws[:, self.res * 2 - 7], gs)
         img = self.toRGB(x, style, skip=img)
 
@@ -678,11 +677,11 @@ class Decoder(nn.Module):
         # ...
         # Dec_512x512 -- DecBlock
 
-    def forward(self, x, ws, gs, e_features, noise_mode='random'):
-        x, img = self.Dec_16x16(x, ws, gs, e_features, noise_mode=noise_mode)
+    def forward(self, x, ws, gs, e_features):
+        x, img = self.Dec_16x16(x, ws, gs, e_features)
         for res in range(5, self.res_log2 + 1):
             block = getattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res))
-            x, img = block(x, img, ws, gs, e_features, noise_mode=noise_mode)
+            x, img = block(x, img, ws, gs, e_features)
 
         return img
 
@@ -709,10 +708,10 @@ class DecStyleBlock(nn.Module):
                            style_dim=style_dim,
                            )
 
-    def forward(self, x, img, style, skip, noise_mode='random'):
-        x = self.conv0(x, style, noise_mode=noise_mode)
+    def forward(self, x, img, style, skip):
+        x = self.conv0(x, style)
         x = x + skip
-        x = self.conv1(x, style, noise_mode=noise_mode)
+        x = self.conv1(x, style)
         img = self.toRGB(x, style, skip=img)
 
         return x, img
@@ -775,7 +774,7 @@ class FirstStage(nn.Module):
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
         # pdb.set_trace()
 
-    def forward(self, images_in, masks_in, ws, noise_mode='random'):
+    def forward(self, images_in, masks_in, ws):
         x = torch.cat([masks_in - 0.5, images_in * masks_in], dim=1)
 
         skips = []
@@ -819,7 +818,7 @@ class FirstStage(nn.Module):
         x = token2feature(x, x_size).contiguous()
         img = None
         for i, block in enumerate(self.dec_conv): # len(self.dec_conv) === 3
-            x, img = block(x, img, style, skips[len(self.dec_conv)-i-1], noise_mode=noise_mode)
+            x, img = block(x, img, style, skips[len(self.dec_conv)-i-1])
         # self.dec_conv -- DecStyleBlock, ToRGBWithSkip
 
         # ensemble
@@ -861,8 +860,8 @@ class SynthesisNet(nn.Module):
         self.dec = Decoder(resolution_log2, style_dim, img_channels)
 
 
-    def forward(self, images_in, masks_in, ws, noise_mode='random'):
-        out_stg1 = self.first_stage(images_in, masks_in, ws, noise_mode=noise_mode)
+    def forward(self, images_in, masks_in, ws):
+        out_stg1 = self.first_stage(images_in, masks_in, ws)
 
         # encoder
         x = images_in * masks_in + out_stg1 * (1 - masks_in)
@@ -881,7 +880,7 @@ class SynthesisNet(nn.Module):
         gs = self.to_style(fea_16)
 
         # decoder
-        img = self.dec(fea_16, ws, gs, e_features, noise_mode=noise_mode)
+        img = self.dec(fea_16, ws, gs, e_features)
 
         # ensemble
         img = img * (1 - masks_in) + images_in * masks_in
@@ -919,14 +918,13 @@ class Generator(nn.Module):
                                   w_dim=w_dim,
                                   num_ws=self.synthesis.num_layers)
 
-    def forward(self, images_in, masks_in, z, noise_mode='random'):
+    def forward(self, images_in, masks_in, z):
         todos.debug.output_var("images_in", images_in)
         todos.debug.output_var("masks_in", masks_in)
         todos.debug.output_var("z", z)
         # print("c", c)
         # todos.debug.output_var("truncation_cutoff", truncation_cutoff)
         # todos.debug.output_var("skip_w_avg_update", skip_w_avg_update)
-        # todos.debug.output_var("noise_mode", noise_mode)
 
         # ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff,
         #                   skip_w_avg_update=skip_w_avg_update)
@@ -935,5 +933,5 @@ class Generator(nn.Module):
         # todos.debug.output_var("ws", ws)
         # tensor [ws] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
 
-        img = self.synthesis(images_in, masks_in, ws, noise_mode=noise_mode)
+        img = self.synthesis(images_in, masks_in, ws)
         return img
