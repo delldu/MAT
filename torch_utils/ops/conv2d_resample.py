@@ -52,14 +52,14 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
             return x.to(memory_format=torch.channels_last)
 
     # Otherwise => execute using conv2d_gradfix.
+    # transpose == True | False
     op = conv2d_gradfix.conv_transpose2d if transpose else conv2d_gradfix.conv2d
     return op(x, w, stride=stride, padding=padding, groups=groups)
 
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
-def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight=True, 
-    flip_filter=False):
+def conv2d_resample(x, w, f=None, up=1, down=1, padding=0):
     r"""2D convolution with optional up/downsampling.
     """
     # x.size() -- [1, 4, 512, 512]
@@ -75,23 +75,19 @@ def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight
     # flip_weight === True
     # flip_filter === False
     # Validate arguments.
-    if not flip_weight:
-        pdb.set_trace()
-    if flip_filter:
-        pdb.set_trace()
 
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
     assert f is None or (isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32)
     assert isinstance(up, int) and (up >= 1)
     assert isinstance(down, int) and (down >= 1)
-    assert isinstance(groups, int) and (groups >= 1)
     out_channels, in_channels_per_group, kh, kw = _get_weight_shape(w)
     fw, fh = _get_filter_size(f)
     px0, px1, py0, py1 = _parse_padding(padding)
 
     # Adjust padding to account for up/downsampling.
     if up > 1:
+        # up == 2 ==> pdb.set_trace()
         px0 += (fw + up - 1) // 2
         px1 += (fw - up) // 2
         py0 += (fh + up - 1) // 2
@@ -105,53 +101,62 @@ def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight
     # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
     if kw == 1 and kh == 1 and (down > 1 and up == 1):
         x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1], 
-            flip_filter=flip_filter)
-        x = _conv2d_wrapper(x=x, w=w, groups=groups, flip_weight=flip_weight)
+            flip_filter=False)
+        x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
         return x
 
     # Fast path: 1x1 convolution with upsampling only => convolve first, then upsample.
     if kw == 1 and kh == 1 and (up > 1 and down == 1):
-        x = _conv2d_wrapper(x=x, w=w, groups=groups, flip_weight=flip_weight)
+        pdb.set_trace()
+
+        x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
         x = upfirdn2d.upfirdn2d(x=x, f=f, up=up, padding=[px0,px1,py0,py1], gain=up**2, 
-            flip_filter=flip_filter)
+            flip_filter=False)
         return x
 
     # Fast path: downsampling only => use strided convolution.
     if down > 1 and up == 1:
-        x = upfirdn2d.upfirdn2d(x=x, f=f, padding=[px0,px1,py0,py1], flip_filter=flip_filter)
-        x = _conv2d_wrapper(x=x, w=w, stride=down, groups=groups, flip_weight=flip_weight)
+        x = upfirdn2d.upfirdn2d(x=x, f=f, padding=[px0,px1,py0,py1], flip_filter=False)
+        x = _conv2d_wrapper(x=x, w=w, stride=down, groups=1, flip_weight=True)
         return x
 
     # Fast path: upsampling with optional downsampling => use transpose strided convolution.
     if up > 1:
-        if groups == 1:
-            w = w.transpose(0, 1)
-        else:
-            w = w.reshape(groups, out_channels // groups, in_channels_per_group, kh, kw)
-            w = w.transpose(1, 2)
-            w = w.reshape(groups * in_channels_per_group, out_channels // groups, kh, kw)
+        # up == 2 ==> pdb.set_trace()
+        # if groups == 1:
+        #     w = w.transpose(0, 1)
+        # else:
+        #     pdb.set_trace()
+        #     w = w.reshape(groups, out_channels // groups, in_channels_per_group, kh, kw)
+        #     w = w.transpose(1, 2)
+        #     w = w.reshape(groups * in_channels_per_group, out_channels // groups, kh, kw)
+        w = w.transpose(0, 1)
+
         px0 -= kw - 1
         px1 -= kw - up
         py0 -= kh - 1
         py1 -= kh - up
         pxt = max(min(-px0, -px1), 0)
         pyt = max(min(-py0, -py1), 0)
-        x = _conv2d_wrapper(x=x, w=w, stride=up, padding=[pyt,pxt], groups=groups, transpose=True, flip_weight=(not flip_weight))
-        x = upfirdn2d.upfirdn2d(x=x, f=f, padding=[px0+pxt,px1+pxt,py0+pyt,py1+pyt], gain=up**2, flip_filter=flip_filter)
+        x = _conv2d_wrapper(x=x, w=w, stride=up, padding=[pyt,pxt], groups=1, transpose=True, 
+            flip_weight=False)
+        x = upfirdn2d.upfirdn2d(x=x, f=f, padding=[px0+pxt,px1+pxt,py0+pyt,py1+pyt], gain=up**2, 
+            flip_filter=False)
         if down > 1:
-            x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, flip_filter=flip_filter)
+            x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, flip_filter=False)
         return x
 
     # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
     if up == 1 and down == 1:
         if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
-            return _conv2d_wrapper(x=x, w=w, padding=[py0,px0], groups=groups, flip_weight=flip_weight)
+            return _conv2d_wrapper(x=x, w=w, padding=[py0,px0], groups=1, flip_weight=True)
 
     # Fallback: Generic reference implementation.
-    x = upfirdn2d.upfirdn2d(x=x, f=(f if up > 1 else None), up=up, padding=[px0,px1,py0,py1], gain=up**2, flip_filter=flip_filter)
-    x = _conv2d_wrapper(x=x, w=w, groups=groups, flip_weight=flip_weight)
+    x = upfirdn2d.upfirdn2d(x=x, f=(f if up > 1 else None), up=up, padding=[px0,px1,py0,py1], 
+        gain=up**2, flip_filter=False)
+    x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
     if down > 1:
-        x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, flip_filter=flip_filter)
+        x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, flip_filter=False)
     return x
 
 #----------------------------------------------------------------------------

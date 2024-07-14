@@ -147,7 +147,7 @@ class ModulatedConv2d(nn.Module):
         weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
         x = x.view(1, batch * in_channels, height, width)
         x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, 
-            up=self.up, down=self.down, padding=self.padding, groups=batch)
+                up=self.up, down=self.down, padding=self.padding)
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -184,10 +184,11 @@ class ModulatedConv2dDemodulate(nn.Module):
         decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
         weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
 
-        weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
+        weight = weight.view(batch * self.out_channels, in_channels, 
+            self.kernel_size, self.kernel_size)
         x = x.view(1, batch * in_channels, height, width)
-        x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, up=self.up, down=self.down,
-                                            padding=self.padding, groups=batch)
+        x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, 
+                up=self.up, down=self.down, padding=self.padding)
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -342,15 +343,6 @@ class MappingNet(torch.nn.Module):
         layer_features = 512,       # Number of intermediate features in the mapping layers
     ):
         super().__init__()
-        # z_dim = 512
-        # c_dim = 0
-        # w_dim = 512
-        # num_ws = 12
-        # num_layers = 8
-        # layer_features = 512
-
-        # self.z_dim = z_dim
-        # self.c_dim = c_dim
         self.num_ws = num_ws
         self.num_layers = num_layers
 

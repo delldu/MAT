@@ -34,7 +34,7 @@ def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
 
 @persistence.persistent_class
 class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
+    def __init__(self, in_features, hidden_features=None, out_features=None):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -173,8 +173,7 @@ class SwinTransformerBlock(nn.Module):
     """
 
     def __init__(self, dim, input_resolution, num_heads, down_ratio=1, window_size=7, shift_size=0,
-                 mlp_ratio=4.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 mlp_ratio=4.):
         super().__init__()
         # dim = 180
         # input_resolution = [64, 64]
@@ -183,10 +182,7 @@ class SwinTransformerBlock(nn.Module):
         # window_size = 8
         # shift_size = 0
         # mlp_ratio = 2.0
-        # act_layer = <class 'torch.nn.modules.activation.GELU'>
-        # norm_layer = <class 'torch.nn.modules.normalization.LayerNorm'>
 
-        print("SwinTransformerBlock act_layer -- ", act_layer, "norm_layer", norm_layer)
 
         # self.dim = dim
         self.input_resolution = input_resolution
@@ -203,13 +199,13 @@ class SwinTransformerBlock(nn.Module):
 
         if self.shift_size > 0:
             down_ratio = 1
-        self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
-                                    down_ratio=down_ratio)
+        self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), 
+                        num_heads=num_heads, down_ratio=down_ratio)
 
         self.fuse = FullyConnectedLayer(in_features=dim * 2, out_features=dim)
 
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim)
 
         if self.shift_size > 0:
             # ==> pdb.set_trace()
@@ -387,7 +383,7 @@ class BasicLayer(nn.Module):
     """
 
     def __init__(self, dim, input_resolution, depth, num_heads, window_size, down_ratio=1,
-                 mlp_ratio=2., norm_layer=nn.LayerNorm, downsample=None):
+                 mlp_ratio=2., downsample=None):
 
         super().__init__()
         # dim = 180
@@ -397,7 +393,6 @@ class BasicLayer(nn.Module):
         # window_size = 8
         # down_ratio = 1
         # mlp_ratio = 2.0
-        # norm_layer = <class 'torch.nn.modules.normalization.LayerNorm'>
         # downsample = None
 
 
@@ -417,8 +412,7 @@ class BasicLayer(nn.Module):
             SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
                                  num_heads=num_heads, down_ratio=down_ratio, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
-                                 mlp_ratio=mlp_ratio,
-                                 norm_layer=norm_layer)
+                                 mlp_ratio=mlp_ratio)
             for i in range(depth)]) # depth === 2
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
