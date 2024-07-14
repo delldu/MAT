@@ -1,6 +1,6 @@
 import sys
 sys.path.insert(0, '../')
-from collections import OrderedDict
+# from collections import OrderedDict
 import numpy as np
 
 import torch
@@ -91,24 +91,22 @@ class Conv2dLayer(nn.Module):
                  in_channels,                    # Number of input channels.
                  out_channels,                   # Number of output channels.
                  kernel_size,                    # Width and height of the convolution kernel.
-                 bias            = True,         # Apply additive bias before the activation function?
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
-                 resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
         self.up = up
         self.down = down
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
             
         self.padding = kernel_size // 2
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
         self.act_gain = 1.4142135623730951 # bias_act.activation_funcs['lrelu'].def_gain
 
         weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size])
-        bias = torch.zeros([out_channels]) if bias else None
+        bias = torch.zeros([out_channels])
         self.weight = nn.Parameter(weight)
-        self.bias = nn.Parameter(bias) if bias is not None else None
+        self.bias = nn.Parameter(bias)
 
     def forward(self, x, gain=1):
         w = self.weight * self.weight_gain
@@ -128,7 +126,6 @@ class ModulatedConv2d(nn.Module):
                  style_dim,                     # dimension of the style code
                  up=1,                          # Integer upsampling factor.
                  down=1,                        # Integer downsampling factor.
-                 resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
         self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
@@ -138,7 +135,7 @@ class ModulatedConv2d(nn.Module):
         self.padding = self.kernel_size // 2
         self.up = up
         self.down = down
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
 
         self.affine = LinearFC(style_dim, in_channels, bias_init=1)
 
@@ -164,8 +161,7 @@ class ModulatedConv2dDemodulate(nn.Module):
                  style_dim,                     # dimension of the style code
                  up=1,                          # Integer upsampling factor.
                  down=1,                        # Integer downsampling factor.
-                 resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
-                 ):
+                ):
         super().__init__()
 
         self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
@@ -175,7 +171,7 @@ class ModulatedConv2dDemodulate(nn.Module):
         self.padding = self.kernel_size // 2
         self.up = up
         self.down = down
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
 
         self.affine = LinearFC(style_dim, in_channels, bias_init=1)
 
@@ -206,7 +202,6 @@ class StyleConv(torch.nn.Module):
         style_dim,                      # Intermediate latent (W) dimensionality.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 1,            # Integer upsampling factor.
-        resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
     ):
         super().__init__()
         self.conv = ModulatedConv2dDemodulate(
@@ -215,7 +210,6 @@ class StyleConv(torch.nn.Module):
                         kernel_size=kernel_size,
                         style_dim=style_dim,
                         up=up,
-                        resample_filter=resample_filter,
                     )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.act_gain = 1.4142135623730951 #bias_act.activation_funcs['lrelu'].def_gain
@@ -239,7 +233,6 @@ class StyleConvWithNoise(torch.nn.Module):
         resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 1,            # Integer upsampling factor.
-        resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
     ):
         super().__init__()
 
@@ -249,7 +242,6 @@ class StyleConvWithNoise(torch.nn.Module):
                         kernel_size=kernel_size,
                         style_dim=style_dim,
                         up=up,
-                        resample_filter=resample_filter,
                     )
 
         self.resolution = resolution
@@ -280,7 +272,6 @@ class ToRGB(torch.nn.Module):
                  out_channels,
                  style_dim,
                  kernel_size=1,
-                 resample_filter=[1,3,3,1],
                 ):
         super().__init__()
 
@@ -289,10 +280,9 @@ class ToRGB(torch.nn.Module):
                         out_channels=out_channels,
                         kernel_size=kernel_size,
                         style_dim=style_dim,
-                        resample_filter=resample_filter,
                     )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
         #  self.resample_filter.size() -- [4, 4]
 
     def forward(self, x, style, skip=None):
@@ -308,7 +298,6 @@ class ToRGBWithSkip(torch.nn.Module):
                  out_channels,
                  style_dim,
                  kernel_size=1,
-                 resample_filter=[1,3,3,1],
                 ):
         super().__init__()
 
@@ -317,10 +306,9 @@ class ToRGBWithSkip(torch.nn.Module):
                         out_channels=out_channels,
                         kernel_size=kernel_size,
                         style_dim=style_dim,
-                        resample_filter=resample_filter,
                     )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
         #  self.resample_filter.size() -- [4, 4]
 
     def forward(self, x, style, skip):
@@ -346,12 +334,12 @@ def get_style_code(a, b):
 @persistence.persistent_class
 class MappingNet(torch.nn.Module):
     def __init__(self,
-        z_dim = 512,                # Input latent (Z) dimensionality, 0 = no latent.
+        z_dim = 512,                # Input latent (Z) dimensionality
         c_dim = 0,                  # Conditioning label (C) dimensionality, 0 = no label.
         w_dim = 512,                # Intermediate latent (W) dimensionality.
-        num_ws = 12,                # Number of intermediate latents to output, None = do not broadcast.
-        num_layers      = 8,        # Number of mapping layers.
-        layer_features  = 512,      # Number of intermediate features in the mapping layers, None = same as w_dim.
+        num_ws = 12,                # Number of intermediate latents to output
+        num_layers = 8,             # Number of mapping layers.
+        layer_features = 512,       # Number of intermediate features in the mapping layers
     ):
         super().__init__()
         # z_dim = 512
@@ -361,8 +349,8 @@ class MappingNet(torch.nn.Module):
         # num_layers = 8
         # layer_features = 512
 
-        self.z_dim = z_dim
-        self.c_dim = c_dim
+        # self.z_dim = z_dim
+        # self.c_dim = c_dim
         self.num_ws = num_ws
         self.num_layers = num_layers
 
@@ -384,9 +372,17 @@ class MappingNet(torch.nn.Module):
         x = normalize_2nd_moment(z.to(torch.float32))
 
         # Main layers.
-        for idx in range(self.num_layers): # self.num_layers === 8
-            layer = getattr(self, f'fc{idx}')
-            x = layer(x)
+        # for idx in range(self.num_layers): # self.num_layers === 8
+        #     layer = getattr(self, f'fc{idx}')
+        #     x = layer(x)
+        x = self.fc0(x)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+        x = self.fc5(x)
+        x = self.fc6(x)
+        x = self.fc7(x)
 
         x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
 

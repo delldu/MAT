@@ -100,18 +100,11 @@ def setup_filter(f, device=torch.device('cpu'), normalize=True, flip_filter=Fals
 
 #----------------------------------------------------------------------------
 
-def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1, impl='cuda'):
+def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1):
     r"""Pad, upsample, filter, and downsample a batch of 2D images.
     """
-#     return _upfirdn2d_ref(x, f, up=up, down=down, padding=padding, flip_filter=flip_filter, gain=gain)
-
-# #----------------------------------------------------------------------------
-
-# @misc.profiled_function
-# def _upfirdn2d_ref(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1):
     """Slow reference implementation of `upfirdn2d()` using standard PyTorch ops.
     """
-    # Validate arguments.
     assert isinstance(x, torch.Tensor) and x.ndim == 4
     if f is None:
         f = torch.ones([1, 1], dtype=torch.float32, device=x.device)
@@ -134,14 +127,17 @@ def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1, impl='cu
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
     f = f.to(x.dtype)
-    if not flip_filter:
+    if not flip_filter: # True
         f = f.flip(list(range(f.ndim)))
+    else:
+        pdb.set_trace()
 
     # Convolve with the filter.
     f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim)
     if f.ndim == 4:
         x = conv2d_gradfix.conv2d(input=x, weight=f, groups=num_channels)
     else:
+        pdb.set_trace()
         x = conv2d_gradfix.conv2d(input=x, weight=f.unsqueeze(2), groups=num_channels)
         x = conv2d_gradfix.conv2d(input=x, weight=f.unsqueeze(3), groups=num_channels)
 
@@ -151,10 +147,10 @@ def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1, impl='cu
 
 #----------------------------------------------------------------------------
 
-_upfirdn2d_cuda_cache = dict()
+# _upfirdn2d_cuda_cache = dict()
 
 
-def upsample2d(x, f, up=2, padding=0, flip_filter=False, gain=1, impl='cuda'):
+def upsample2d(x, f, up=2, padding=0, flip_filter=False, gain=1):
     r"""Upsample a batch of 2D images using the given 2D FIR filter.
     """
     upx, upy = _parse_scaling(up)
@@ -166,6 +162,6 @@ def upsample2d(x, f, up=2, padding=0, flip_filter=False, gain=1, impl='cuda'):
         pady0 + (fh + upy - 1) // 2,
         pady1 + (fh - upy) // 2,
     ]
-    return upfirdn2d(x, f, up=up, padding=p, flip_filter=flip_filter, gain=gain*upx*upy, impl=impl)
+    return upfirdn2d(x, f, up=up, padding=p, flip_filter=flip_filter, gain=gain*upx*upy)
 
 #----------------------------------------------------------------------------

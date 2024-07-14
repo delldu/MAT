@@ -69,17 +69,15 @@ class Conv2dLayerPartial(nn.Module):
                  in_channels,                    # Number of input channels.
                  out_channels,                   # Number of output channels.
                  kernel_size,                    # Width and height of the convolution kernel.
-                 bias            = True,         # Apply additive bias before the activation function?
                  up              = 1,            # Integer upsampling factor.
                  down            = 1,            # Integer downsampling factor.
-                 resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
         # in_channels = 4
         # out_channels = 180
         # kernel_size = 3
 
-        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, bias, up, down, resample_filter)
+        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, up, down)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
         self.slide_winsize = kernel_size ** 2
@@ -187,6 +185,8 @@ class SwinTransformerBlock(nn.Module):
         # mlp_ratio = 2.0
         # act_layer = <class 'torch.nn.modules.activation.GELU'>
         # norm_layer = <class 'torch.nn.modules.normalization.LayerNorm'>
+
+        print("SwinTransformerBlock act_layer -- ", act_layer, "norm_layer", norm_layer)
 
         # self.dim = dim
         self.input_resolution = input_resolution
@@ -833,9 +833,9 @@ class SynthesisNet(nn.Module):
                  w_dim = 512,                     # Intermediate latent (W) dimensionality.
                  img_resolution = 512,            # Output image resolution.
                  img_channels   = 3,        # Number of color channels.
-                 channel_base   = 32768,    # Overall multiplier for the number of channels.
-                 channel_decay  = 1.0,
-                 channel_max    = 512,      # Maximum number of channels in any layer.
+                 # channel_base   = 32768,    # Overall multiplier for the number of channels.
+                 # channel_decay  = 1.0,
+                 # channel_max    = 512,      # Maximum number of channels in any layer.
                  ):
         super().__init__()
         # w_dim = 512
@@ -907,8 +907,8 @@ class Generator(nn.Module):
         # img_channels = 3
 
         self.z_dim = z_dim
-        self.c_dim = c_dim
-        self.w_dim = w_dim
+        # self.c_dim = c_dim
+        # self.w_dim = w_dim
 
         self.synthesis = SynthesisNet(w_dim=w_dim,
                                       img_resolution=img_resolution,

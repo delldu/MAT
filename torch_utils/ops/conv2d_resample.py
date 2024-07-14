@@ -15,6 +15,7 @@ from . import conv2d_gradfix
 from . import upfirdn2d
 from .upfirdn2d import _parse_padding
 from .upfirdn2d import _get_filter_size
+import pdb
 
 #----------------------------------------------------------------------------
 
@@ -29,6 +30,7 @@ def _get_weight_shape(w):
 def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True):
     """Wrapper for the underlying `conv2d()` and `conv_transpose2d()` implementations.
     """
+    # print(f"_conv2d_wrapper groups={groups}, flip_weight={flip_weight}")
     out_channels, in_channels_per_group, kh, kw = _get_weight_shape(w)
 
     # Flip weight if requested.
@@ -56,31 +58,28 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
-def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight=True, flip_filter=False):
+def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight=True, 
+    flip_filter=False):
     r"""2D convolution with optional up/downsampling.
-
-    Padding is performed only once at the beginning, not between the operations.
-
-    Args:
-        x:              Input tensor of shape
-                        `[batch_size, in_channels, in_height, in_width]`.
-        w:              Weight tensor of shape
-                        `[out_channels, in_channels//groups, kernel_height, kernel_width]`.
-        f:              Low-pass filter for up/downsampling. Must be prepared beforehand by
-                        calling upfirdn2d.setup_filter(). None = identity (default).
-        up:             Integer upsampling factor (default: 1).
-        down:           Integer downsampling factor (default: 1).
-        padding:        Padding with respect to the upsampled image. Can be a single number
-                        or a list/tuple `[x, y]` or `[x_before, x_after, y_before, y_after]`
-                        (default: 0).
-        groups:         Split input channels into N groups (default: 1).
-        flip_weight:    False = convolution, True = correlation (default: True).
-        flip_filter:    False = convolution, True = correlation (default: False).
-
-    Returns:
-        Tensor of the shape `[batch_size, num_channels, out_height, out_width]`.
     """
+    # x.size() -- [1, 4, 512, 512]
+    # w.size() -- [180, 4, 3, 3]
+    # f.size() -- [4, 4]
+    # ---------------------------------
+    # up = 1
+    # down = 1
+    # padding = 1
+
+
+    # groups === 1
+    # flip_weight === True
+    # flip_filter === False
     # Validate arguments.
+    if not flip_weight:
+        pdb.set_trace()
+    if flip_filter:
+        pdb.set_trace()
+
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
     assert f is None or (isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32)
@@ -105,14 +104,16 @@ def conv2d_resample(x, w, f=None, up=1, down=1, padding=0, groups=1, flip_weight
 
     # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
     if kw == 1 and kh == 1 and (down > 1 and up == 1):
-        x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1], flip_filter=flip_filter)
+        x = upfirdn2d.upfirdn2d(x=x, f=f, down=down, padding=[px0,px1,py0,py1], 
+            flip_filter=flip_filter)
         x = _conv2d_wrapper(x=x, w=w, groups=groups, flip_weight=flip_weight)
         return x
 
     # Fast path: 1x1 convolution with upsampling only => convolve first, then upsample.
     if kw == 1 and kh == 1 and (up > 1 and down == 1):
         x = _conv2d_wrapper(x=x, w=w, groups=groups, flip_weight=flip_weight)
-        x = upfirdn2d.upfirdn2d(x=x, f=f, up=up, padding=[px0,px1,py0,py1], gain=up**2, flip_filter=flip_filter)
+        x = upfirdn2d.upfirdn2d(x=x, f=f, up=up, padding=[px0,px1,py0,py1], gain=up**2, 
+            flip_filter=flip_filter)
         return x
 
     # Fast path: downsampling only => use strided convolution.
