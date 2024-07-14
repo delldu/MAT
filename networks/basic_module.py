@@ -125,7 +125,6 @@ class Conv2dLayer(nn.Module):
         return out
 
 #----------------------------------------------------------------------------
-# xxxx_debug
 @persistence.persistent_class
 class ModulatedConv2d(nn.Module):
     def __init__(self,
@@ -133,13 +132,11 @@ class ModulatedConv2d(nn.Module):
                  out_channels,                  # Number of output channels.
                  kernel_size,                   # Width and height of the convolution kernel.
                  style_dim,                     # dimension of the style code
-                 demodulate=True,               # perfrom demodulation
                  up=1,                          # Integer upsampling factor.
                  down=1,                        # Integer downsampling factor.
                  resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
                  ):
         super().__init__()
-        self.demodulate = demodulate # True | False
 
         self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
         self.out_channels = out_channels
@@ -157,13 +154,46 @@ class ModulatedConv2d(nn.Module):
         style = self.affine(style).view(batch, 1, in_channels, 1, 1)
         weight = self.weight * self.weight_gain * style
 
-        if self.demodulate: # True | False
-            # ==> pdb.set_trace()
-            decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
-            weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
+        weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
+        x = x.view(1, batch * in_channels, height, width)
+        x = conv2d_resample.conv2d_resample(x=x, w=weight, f=self.resample_filter, up=self.up, down=self.down,
+                                            padding=self.padding, groups=batch)
+        out = x.view(batch, self.out_channels, *x.shape[2:])
+
+        return out
+
+@persistence.persistent_class
+class ModulatedConv2dDemodulate(nn.Module):
+    def __init__(self,
+                 in_channels,                   # Number of input channels.
+                 out_channels,                  # Number of output channels.
+                 kernel_size,                   # Width and height of the convolution kernel.
+                 style_dim,                     # dimension of the style code
+                 up=1,                          # Integer upsampling factor.
+                 down=1,                        # Integer downsampling factor.
+                 resample_filter=[1,3,3,1],  # Low-pass filter to apply when resampling activations.
+                 ):
+        super().__init__()
+
+        self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
+        self.padding = self.kernel_size // 2
+        self.up = up
+        self.down = down
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+
+        self.affine = LinearFC(style_dim, in_channels, bias_init=1)
+
+    def forward(self, x, style):
+        batch, in_channels, height, width = x.shape
+        style = self.affine(style).view(batch, 1, in_channels, 1, 1)
+        weight = self.weight * self.weight_gain * style
+
+        # Demodulate
+        decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
+        weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
 
         weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
         x = x.view(1, batch * in_channels, height, width)
@@ -172,6 +202,7 @@ class ModulatedConv2d(nn.Module):
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
+
 
 #----------------------------------------------------------------------------
 # xxxx_debug
@@ -189,11 +220,10 @@ class StyleConv(torch.nn.Module):
     ):
         super().__init__()
 
-        self.conv = ModulatedConv2d(in_channels=in_channels,
+        self.conv = ModulatedConv2dDemodulate(in_channels=in_channels,
                                     out_channels=out_channels,
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
-                                    demodulate=True,
                                     up=up,
                                     resample_filter=resample_filter)
 
@@ -249,7 +279,6 @@ class ToRGB(torch.nn.Module):
                                     out_channels=out_channels,
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
-                                    demodulate=False,
                                     resample_filter=resample_filter)
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
@@ -260,6 +289,7 @@ class ToRGB(torch.nn.Module):
         out = bias_act.bias_act(x, self.bias)
         return out
 
+# xxxx_debug
 @persistence.persistent_class
 class ToRGBWithSkip(torch.nn.Module):
     def __init__(self,
@@ -275,7 +305,6 @@ class ToRGBWithSkip(torch.nn.Module):
                                     out_channels=out_channels,
                                     kernel_size=kernel_size,
                                     style_dim=style_dim,
-                                    demodulate=False,
                                     resample_filter=resample_filter)
         self.bias = nn.Parameter(torch.zeros([out_channels]))
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
