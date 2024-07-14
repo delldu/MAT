@@ -28,15 +28,6 @@ from networks.mat import Generator
 import todos
 import pdb
 
-# def num_range(s: str) -> List[int]:
-#     '''Accept either a comma separated list of numbers 'a,b,c' or a range 'a-c' and return as a list of ints.'''
-
-#     range_re = re.compile(r'^(\d+)-(\d+)$')
-#     m = range_re.match(s)
-#     if m:
-#         return list(range(int(m.group(1)), int(m.group(2))+1))
-#     vals = s.split(',')
-#     return [int(x) for x in vals]
 
 def named_params_and_buffers(module):
     assert isinstance(module, torch.nn.Module)
@@ -51,10 +42,6 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False):
         if name in src_tensors:
             tensor.copy_(src_tensors[name].detach()).requires_grad_(tensor.requires_grad)
 
-
-# def params_and_buffers(module):
-#     assert isinstance(module, torch.nn.Module)
-#     return list(module.parameters()) + list(module.buffers())
 
 @click.command()
 @click.pass_context
@@ -134,7 +121,7 @@ def generate_images(
         noise_mode = 'random'
 
     # noise_mode -- 'const'
-    # torch.save(G.state_dict(), "/tmp/G.pth") -- 242M
+    torch.save(G.state_dict(), "/tmp/G.pth") #-- 242M
     # G -- SynthesisNet, FirstStage, Conv2dLayerPartial, SwinTransformerBlock, 
     #      BasicLayer, PatchMerging, PatchUpsampling, AdaptiveAvgPool2d, DecStyleBlock, DecBlockFirstV2
 
