@@ -672,10 +672,13 @@ class Decoder(nn.Module):
             setattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res),
                     DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels))
         self.res_log2 = res_log2 # 9
-        pdb.set_trace()
+        # self.Dec_16x16 -- DecBlockFirstV2
+        # Dec_32x32 -- DecBlock
+        # Dec_64x64 -- DecBlock
+        # ...
+        # Dec_512x512 -- DecBlock
 
     def forward(self, x, ws, gs, e_features, noise_mode='random'):
-
         x, img = self.Dec_16x16(x, ws, gs, e_features, noise_mode=noise_mode)
         for res in range(5, self.res_log2 + 1):
             block = getattr(self, 'Dec_%dx%d' % (2 ** res, 2 ** res))
@@ -770,7 +773,7 @@ class FirstStage(nn.Module):
         for i in range(down_time):  # down_time == 3, from 64 to input size
             res = res * 2
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
-        pdb.set_trace()
+        # pdb.set_trace()
 
     def forward(self, images_in, masks_in, ws, noise_mode='random'):
         x = torch.cat([masks_in - 0.5, images_in * masks_in], dim=1)
@@ -782,6 +785,12 @@ class FirstStage(nn.Module):
             x, mask = block(x, mask)
             if i != len(self.enc_conv) - 1: # # xxxx_debug
                 skips.append(x)
+        # (Pdb) self.enc_conv
+        # ModuleList(
+        #   (0-2): 3 x Conv2dLayerPartial(
+        #     (conv): Conv2dLayer()
+        #   )
+        # )
 
         x_size = x.size()[-2:]
         x = feature2token(x)
@@ -805,11 +814,13 @@ class FirstStage(nn.Module):
                 x = x * mul_map + add_n * (1 - mul_map)
                 gs = self.to_style(self.down_conv(token2feature(x, x_size)).flatten(start_dim=1))
                 style = torch.cat([gs, ws], dim=1)
+        # self.tran -- BasicLayer[0] -- BasicLayer[4]
 
         x = token2feature(x, x_size).contiguous()
         img = None
         for i, block in enumerate(self.dec_conv): # len(self.dec_conv) === 3
             x, img = block(x, img, style, skips[len(self.dec_conv)-i-1], noise_mode=noise_mode)
+        # self.dec_conv -- DecStyleBlock, ToRGBWithSkip
 
         # ensemble
         img = img * (1 - masks_in) + images_in * masks_in
