@@ -59,7 +59,7 @@ def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_w
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
-def conv2d_resample(x, w, f=None, up=1, down=1, padding=0):
+def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     r"""2D convolution with optional up/downsampling.
     """
     # x.size() -- [1, 4, 512, 512]
@@ -69,12 +69,7 @@ def conv2d_resample(x, w, f=None, up=1, down=1, padding=0):
     # up = 1
     # down = 1
     # padding = 1
-
-
-    # groups === 1
-    # flip_weight === True
-    # flip_filter === False
-    # Validate arguments.
+    print(f"conv2d_resample up = {up}, down = {down}, padding = {padding}")
 
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
