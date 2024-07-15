@@ -80,7 +80,6 @@ class Conv2dLayerPartial(nn.Module):
 
     def forward(self, x, mask=None):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
-        # todos.debug.output_var("Conv2dLayerPartial mask", mask)
         if mask is not None:
             # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
             # with torch.no_grad():
@@ -787,7 +786,6 @@ class ToStyle(nn.Module):
         return x
 
 
-# xxxx_debug
 class DecBlockFirst(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
         super().__init__()
@@ -853,7 +851,7 @@ class DecBlock(nn.Module):
             style_dim=style_dim,
             resolution=2**res,
             kernel_size=3,
-            up=2,
+            up=2, # !!!
         )
 
         self.conv1 = StyleConvWithNoise(
@@ -916,6 +914,31 @@ class Decoder(nn.Module):
 
         return img
 
+
+class StyleConv(torch.nn.Module):
+    def __init__(
+        self,
+        in_channels,  # Number of input channels.
+        out_channels,  # Number of output channels.
+        style_dim,  # Intermediate latent (W) dimensionality.
+        kernel_size=3,  # Convolution kernel size.
+        up=1,  # Integer upsampling factor.
+    ):
+        super().__init__()
+        self.conv = ModulatedConv2dD(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            style_dim=style_dim,
+            up=up,
+        )
+        self.bias = nn.Parameter(torch.zeros([out_channels]))
+
+    def forward(self, x, style):
+        x = self.conv(x, style)
+        out = bias_lrelu(x, self.bias)
+
+        return out
 
 class DecStyleBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
@@ -1035,7 +1058,6 @@ class FirstStage(nn.Module):
         # pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
-        # print("FirstStage")
         # todos.debug.output_var("input_mask", input_mask)
 
         x = torch.cat([input_mask - 0.5, input_image * input_mask], dim=1)
@@ -1160,6 +1182,10 @@ class Generator(nn.Module):
         img_channels=3,  # Number of input color channels.
     ):
         super().__init__()
+        self.MAX_H = 512
+        self.MAX_W = 512
+        self.MAX_TIMES = 1
+
         self.z_dim = z_dim
         self.synthesis = SynthesisNet(
             w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels)
@@ -1196,7 +1222,6 @@ class Generator(nn.Module):
 
 def normalize_2nd_moment(x, dim=1, eps=1e-8):
     return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
-
 
 # ----------------------------------------------------------------------------
 class MappingFC(nn.Module):
@@ -1312,8 +1337,7 @@ class Conv2dLayer(nn.Module):
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
 
-        # !!! pdb.set_trace() # ==> conv2d_resample error
-        
+        #d2u1, d1u1
 
     def forward(self, x):
         w = self.weight * self.weight_gain
@@ -1322,8 +1346,8 @@ class Conv2dLayer(nn.Module):
             x=x,
             w=w,
             f=self.resample_filter,
-            up=self.up,
-            down=self.down,
+            up=self.up, # === 1
+            down=self.down, # 2 | 1
             padding=self.padding,
         )
         # todos.debug.output_var("x2", x)
@@ -1343,8 +1367,6 @@ class ModulatedConv2d(nn.Module):
         out_channels,  # Number of output channels.
         kernel_size,  # Width and height of the convolution kernel.
         style_dim,  # dimension of the style code
-        up=1,  # Integer upsampling factor.
-        down=1,  # Integer downsampling factor.
     ):
         super().__init__()
         self.weight = nn.Parameter(
@@ -1354,10 +1376,7 @@ class ModulatedConv2d(nn.Module):
         self.kernel_size = kernel_size
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size**2))
         self.padding = self.kernel_size // 2
-        self.up = up
-        self.down = down
-        self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1]))
-
+        self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1])) # useless
         self.affine = LinearFC(style_dim, in_channels, bias_init=1)
 
     def forward(self, x, style):
@@ -1369,17 +1388,7 @@ class ModulatedConv2d(nn.Module):
             batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
         x = x.view(1, batch * in_channels, height, width)
-        # todos.debug.output_var("x3", x)
-        x = conv2d_resample(
-            x=x,
-            w=weight,
-            f=self.resample_filter,
-            up=self.up,
-            down=self.down,
-            padding=self.padding,
-        )
-        # todos.debug.output_var("x4", x)
-
+        x = F.conv2d(x, weight, stride=1, padding=[self.padding, self.padding], groups=1)
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1410,6 +1419,7 @@ class ModulatedConv2dD(nn.Module):
 
         self.affine = LinearFC(style_dim, in_channels, bias_init=1)
 
+        # d1u1, d1u2
 
     def forward(self, x, style):
         batch, in_channels, height, width = x.shape
@@ -1429,38 +1439,12 @@ class ModulatedConv2dD(nn.Module):
             x=x,
             w=weight,
             f=self.resample_filter,
-            up=self.up,
-            down=self.down,
+            up=self.up, # 1 | 2
+            down=self.down, # === 1
             padding=self.padding,
         )
         # todos.debug.output_var("x6", x)
         out = x.view(batch, self.out_channels, *x.shape[2:])
-
-        return out
-
-
-class StyleConv(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        style_dim,  # Intermediate latent (W) dimensionality.
-        kernel_size=3,  # Convolution kernel size.
-        up=1,  # Integer upsampling factor.
-    ):
-        super().__init__()
-        self.conv = ModulatedConv2dD(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            style_dim=style_dim,
-            up=up,
-        )
-        self.bias = nn.Parameter(torch.zeros([out_channels]))
-
-    def forward(self, x, style):
-        x = self.conv(x, style)
-        out = bias_lrelu(x, self.bias)
 
         return out
 
@@ -1471,7 +1455,7 @@ class StyleConvWithNoise(torch.nn.Module):
         in_channels,  # Number of input channels.
         out_channels,  # Number of output channels.
         style_dim,  # Intermediate latent (W) dimensionality.
-        resolution,  # Resolution of this layer.
+        resolution=16,  # Resolution of this layer.
         kernel_size=3,  # Convolution kernel size.
         up=1,  # Integer upsampling factor.
     ):
@@ -1512,7 +1496,7 @@ class ToRGB(torch.nn.Module):
             style_dim=style_dim,
         )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1]))
+        self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1])) # useless !!!
         #  self.resample_filter.size() -- [4, 4]
 
     def forward(self, x, style, skip):
@@ -1584,30 +1568,6 @@ class MappingNet(torch.nn.Module):
         # tensor [x] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
         return x
 
-
-# ----------------------------------------------------------------------------
-def _conv2d_wrapper(
-    x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True
-):
-    """Wrapper for the underlying `conv2d()` and `conv_transpose2d()` implementations."""
-    # print(f"_conv2d_wrapper groups={groups}, flip_weight={flip_weight}")
-    out_channels, in_channels_per_group, kh, kw = w.size()
-
-    # Flip weight if requested.
-    if (
-        not flip_weight
-    ):  # conv2d() actually performs correlation (flip_weight=True) not convolution (flip_weight=False).
-        w = w.flip([2, 3])
-        # ==> pdb.set_trace()
-    else:
-        # ==> pdb.set_trace()
-        pass
-
-    # transpose == True | False
-    op = F.conv_transpose2d if transpose else F.conv2d
-    return op(x, w, stride=stride, padding=padding, groups=groups)
-
-
 # ----------------------------------------------------------------------------
 def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     r"""2D convolution with optional up/downsampling."""
@@ -1622,33 +1582,55 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # print(f"  conv2d_resample up={up}, down={down}")
     # todos.debug.output_var("w", w)
 
+    # d2u1, ddu2, d1u1
     out_channels, in_channels_per_group, kh, kw = w.size()  # [180, 4, 3, 3] ?
-    fw, fh = f.size()
+    fw, fh = 4, 4 # f.size()
     # fw === 4, fh === 4
 
     px0, px1, py0, py1 = padding, padding, padding, padding
 
     # Adjust padding to account for up/downsampling.
-    if up > 1:
-        # up == 2 ==> pdb.set_trace()
-        px0 += (fw + up - 1) // 2
-        px1 += (fw - up) // 2
-        py0 += (fh + up - 1) // 2
-        py1 += (fh - up) // 2
-    if down > 1:
+    # if up > 1:
+    #     # up == 2 ==> pdb.set_trace()
+    #     px0 += (fw + up - 1) // 2
+    #     px1 += (fw - up) // 2
+    #     py0 += (fh + up - 1) // 2
+    #     py1 += (fh - up) // 2
+    # if down > 1:
+    #     px0 += (fw - down + 1) // 2
+    #     px1 += (fw - down) // 2
+    #     py0 += (fh - down + 1) // 2
+    #     py1 += (fh - down) // 2
+
+    # Fast path: downsampling only => use strided convolution.
+    if down > 1 and up == 1: # d2u1
         px0 += (fw - down + 1) // 2
         px1 += (fw - down) // 2
         py0 += (fh - down + 1) // 2
         py1 += (fh - down) // 2
 
-    # Fast path: downsampling only => use strided convolution.
-    if down > 1 and up == 1:
-        x = upfirdn2d(x=x, f=f, padding=[px0, px1, py0, py1])
-        x = _conv2d_wrapper(x=x, w=w, stride=down, groups=1, flip_weight=True)
+        # => pdb.set_trace(), [px0, px1, py0, py1] -- [2, 2, 2, 2]
+        x = upfirdn2d(x=x, f=f, padding=[px0, px1, py0, py1]) # up=1, down=1
+        x = F.conv2d(x, w, stride=down, groups=1, padding=0)
+
         return x
 
+    # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
+    if up == 1 and down == 1: #d1u1
+        # if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
+        #     # ==> pdb.set_trace(), [py0, px0] -- [1, 1]
+        return F.conv2d(x, w, stride=1, padding=[py0, px0], groups=1)
+
+
     # Fast path: upsampling with optional downsampling => use transpose strided convolution.
-    if up > 1:
+    if up > 1: #ddu2
+        # up == 2 ==> pdb.set_trace()
+        px0 += (fw + up - 1) // 2
+        px1 += (fw - up) // 2
+        py0 += (fh + up - 1) // 2
+        py1 += (fh - up) // 2
+
+        # ==> pdb.set_trace(), up, down -- (2, 1)
         w = w.transpose(0, 1)
 
         px0 -= kw - 1
@@ -1657,40 +1639,35 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         py1 -= kh - up
         pxt = max(min(-px0, -px1), 0)
         pyt = max(min(-py0, -py1), 0)
-        x = _conv2d_wrapper(
-            x=x,
-            w=w,
-            stride=up,
-            padding=[pyt, pxt],
-            groups=1,
-            transpose=True,
-            flip_weight=False,
-        )
-        x = upfirdn2d(
-            x=x, f=f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2
-        )
-        if down > 1:
-            x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
+
+        w = w.flip([2, 3])
+        x = F.conv_transpose2d(x, w, stride=up, padding=[pyt, pxt], groups=1)
+
+        x = upfirdn2d(x=x, f=f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2)
+        # if down > 1:
+        #     pdb.set_trace()
+        #     x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
         return x
 
-    # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
-    if up == 1 and down == 1:
-        if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
-            return _conv2d_wrapper(
-                x=x, w=w, padding=[py0, px0], groups=1, flip_weight=True
-            )
+    # # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
+    # if up == 1 and down == 1: #d1u1
+    #     if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
+    #         # ==> pdb.set_trace(), [py0, px0] -- [1, 1]
+    #         return F.conv2d(x, w, stride=1, padding=[py0, px0], groups=1)
 
     # Fallback: Generic reference implementation.
-    x = upfirdn2d(
-        x=x,
-        f=(f if up > 1 else None),
-        up=up,
-        padding=[px0, px1, py0, py1],
-        gain=up**2,
-    )
-    x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-    if down > 1:
-        x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
+    # pdb.set_trace()
+    # x = upfirdn2d(
+    #     x=x,
+    #     f=(f if up > 1 else None),
+    #     up=up,
+    #     padding=[px0, px1, py0, py1],
+    #     gain=up**2,
+    # )
+    # x = F.conv2d(x, w, stride=1, padding=0, groups=1)
+
+    # if down > 1:
+    #     x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
     return x
 
 
@@ -1704,42 +1681,64 @@ def setup_filter(f):
 # ----------------------------------------------------------------------------
 def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
     r"""Pad, upsample, filter, and downsample a batch of 2D images."""
-    assert isinstance(x, torch.Tensor) and x.ndim == 4
-    if f is None:
-        pdb.set_trace()
-        f = torch.ones([1, 1], dtype=torch.float32, device=x.device)
+    # assert isinstance(x, torch.Tensor) and x.ndim == 4
+    # if f is None:
+    #     pdb.set_trace()
+    #     f = torch.ones([1, 1], dtype=torch.float32, device=x.device)
 
-    assert isinstance(f, torch.Tensor) and f.ndim in [1, 2]
-    assert f.dtype == torch.float32 and not f.requires_grad
-    batch_size, num_channels, in_height, in_width = x.shape
+    # assert isinstance(f, torch.Tensor) and f.ndim in [1, 2]
+    # assert f.dtype == torch.float32 and not f.requires_grad
 
+    # print("upfirdn2d ------ {")
+    # todos.debug.output_var("x", x)
+    # todos.debug.output_var("f", f)
+    # todos.debug.output_var("up", up)
+    # todos.debug.output_var("down", down)
+    # todos.debug.output_var("padding", padding)
+    # todos.debug.output_var("gain", gain)
+    # print("upfirdn2d ------ }")
+
+    batch_size, num_channels, in_height, in_width = x.size()
     padx0, padx1, pady0, pady1 = padding
 
     # Upsample by inserting zeros.
-    x = x.reshape([batch_size, num_channels, in_height, 1, in_width, 1])
-    x = F.pad(x, [0, up - 1, 0, 0, 0, up - 1])
-    x = x.reshape([batch_size, num_channels, in_height * up, in_width * up])
+    assert up == 1
+    # x = x.reshape([batch_size, num_channels, in_height, 1, in_width, 1])
+    # x = F.pad(x, [0, up - 1, 0, 0, 0, up - 1])
+    # x = x.reshape(batch_size, num_channels, in_height * up, in_width * up)
 
     # Pad or crop.
-    x = F.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
-    x = x[
-        :,
-        :,
-        max(-pady0, 0) : x.shape[2] - max(-pady1, 0),
-        max(-padx0, 0) : x.shape[3] - max(-padx1, 0),
-    ]
+    # tensor [x] size: [1, 180, 512, 512], min: -8.107638, max: 20.929657, mean: 0.010813
+
+
+    # x = F.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
+    x = F.pad(x, [padx0, padx1, pady0, pady1])
+
+    # [2, 2, 2, 2]
+    # tensor [x] size: [1, 180, 516, 516], min: -8.107638, max: 20.929657, mean: 0.010646
+    # xxxx_1111
+    # x = x[:, :,
+    #     max(-pady0, 0) : x.shape[2] - max(-pady1, 0),
+    #     max(-padx0, 0) : x.shape[3] - max(-padx1, 0),
+    # ]
+    # tensor [x] size: [1, 180, 516, 516], min: -8.107638, max: 20.929657, mean: 0.010646
 
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
-    f = f.to(x.dtype)
-    f = f.flip(list(range(f.ndim)))
+    # f = f.to(x.dtype)
+    f = f.flip([0, 1]) #list(range(f.ndim)))
 
     # Convolve with the filter.
-    f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim)
+    # f.size() -- [4, 4]
+    # f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim) # [180, 1, 1, 1]
+    f = f.repeat([num_channels, 1, 1, 1]) # [180, 1, 1, 1]
     x = F.conv2d(input=x, weight=f, groups=num_channels)
+    # tensor [x] size: [1, 180, 513, 513], min: -3.266338, max: 8.514344, mean: 0.010787
 
     # Downsample by throwing away pixels.
     x = x[:, :, ::down, ::down]
+    # tensor [x] size: [1, 180, 513, 513], min: -3.266338, max: 8.514344, mean: 0.010787
+
     return x
 
 

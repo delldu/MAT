@@ -93,10 +93,10 @@ def export_onnx_model():
     # 2. Export onnx model
     input_names = [ "input" ]
     output_names = [ "output" ]
-    dynamic_axes = { 
-        'input' : {2: 'height', 3: 'width'}, 
-        'output' : {2: 'height', 3: 'width'} 
-    }
+    # dynamic_axes = { 
+    #     'input' : {2: 'height', 3: 'width'}, 
+    #     'output' : {2: 'height', 3: 'width'} 
+    # }
     onnx_filename = "output/image_patch.onnx"
 
     torch.onnx.export(model, dummy_input, onnx_filename, 
@@ -104,17 +104,17 @@ def export_onnx_model():
         input_names=input_names, 
         output_names=output_names,
         # opset_version=17,
-        dynamic_axes=dynamic_axes,
+        # dynamic_axes=dynamic_axes,
     )
 
     # 3. Check onnx model file
     onnx_model = onnx.load(onnx_filename)
     onnx.checker.check_model(onnx_model)
 
-    onnx_model, check = simplify(onnx_model)
-    assert check, "Simplified ONNX model could not be validated"
-    onnx_model = onnxoptimizer.optimize(onnx_model)    
-    onnx.save(onnx_model, onnx_filename)
+    # onnx_model, check = simplify(onnx_model)
+    # assert check, "Simplified ONNX model could not be validated"
+    # onnx_model = onnxoptimizer.optimize(onnx_model)    
+    # onnx.save(onnx_model, onnx_filename)
     # print(onnx.helper.printable_graph(onnx_model.graph))
 
     # 4. Run onnx model
