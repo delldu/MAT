@@ -18,7 +18,7 @@ def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
     return NF[2**stage]
 
 
-class Mlp(nn.Module):
+class MLP(nn.Module):
     def __init__(self, in_features, hidden_features):
         super().__init__()
         self.fc1 = LReLuFC(in_features=in_features, out_features=hidden_features)
@@ -30,16 +30,20 @@ class Mlp(nn.Module):
         return x
 
 
-def window_partition(x, window_size):
+def window_partition(x, window_size: int):
     B, H, W, C = x.shape
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+    windows = (
+        x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+    )
     return windows
 
 
-def window_reverse(windows, window_size, H, W):
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+def window_reverse(windows, window_size: int, H: int, W: int):
+    B = windows.shape[0] // (H * W // window_size // window_size)
+    x = windows.view(
+        B, H // window_size, W // window_size, window_size, window_size, -1
+    )
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
@@ -58,13 +62,17 @@ class Conv2dLayerPartial(nn.Module):
         # in_channels = 4
         # out_channels = 180
         # kernel_size = 3
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.up = up
+        self.down = down
 
         self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, up, down)
 
         self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
         # self.weight_maskUpdater.size() -- [1, 1, 3, 3]
         self.slide_winsize = kernel_size**2
-        self.stride = down
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
         #  self.slide_winsize -- 9
 
@@ -77,7 +85,11 @@ class Conv2dLayerPartial(nn.Module):
                 if self.weight_maskUpdater.type() != x.type():
                     self.weight_maskUpdater = self.weight_maskUpdater.to(x)
                 update_mask = F.conv2d(
-                    mask, self.weight_maskUpdater, bias=None, stride=self.stride, padding=self.padding
+                    mask,
+                    self.weight_maskUpdater,
+                    bias=None,
+                    stride=self.down,
+                    padding=self.padding,
                 )
                 mask_ratio = self.slide_winsize / (update_mask + 1e-8)
                 update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
@@ -90,6 +102,10 @@ class Conv2dLayerPartial(nn.Module):
             x = self.conv(x)
             return x, None
 
+    def __repr__(self):
+        s = f"Conv2dLayerPartial(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},up={self.up}, down={self.down})"
+        return s
+
 
 # xxxx_debug
 class WindowAttention(nn.Module):
@@ -97,7 +113,7 @@ class WindowAttention(nn.Module):
 
     def __init__(self, dim, window_size, num_heads):
         super().__init__()
-        # self.dim = dim
+        self.dim = dim
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -117,15 +133,29 @@ class WindowAttention(nn.Module):
         """
         B_, N, C = x.shape
         norm_x = F.normalize(x, p=2.0, dim=-1)
-        q = self.q(norm_x).reshape(B_, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-        k = self.k(norm_x).view(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 3, 1)
-        v = self.v(x).view(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q = (
+            self.q(norm_x)
+            .reshape(B_, N, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 1, 3)
+        )
+        k = (
+            self.k(norm_x)
+            .view(B_, -1, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 3, 1)
+        )
+        v = (
+            self.v(x)
+            .view(B_, -1, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 1, 3)
+        )
 
         attn = (q @ k) * self.scale
 
         if mask is not None:
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
+                1
+            ).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
         else:
             pdb.set_trace()
@@ -133,11 +163,13 @@ class WindowAttention(nn.Module):
         if mask_windows is not None:
             # ==> pdb.set_trace()
             attn_mask_windows = mask_windows.squeeze(-1).unsqueeze(1).unsqueeze(1)
-            attn = attn + attn_mask_windows.masked_fill(attn_mask_windows == 0, float(-100.0)).masked_fill(
-                attn_mask_windows == 1, float(0.0)
-            )
+            attn = attn + attn_mask_windows.masked_fill(
+                attn_mask_windows == 0, float(-100.0)
+            ).masked_fill(attn_mask_windows == 1, float(0.0))
             with torch.no_grad():
-                mask_windows = torch.clamp(torch.sum(mask_windows, dim=1, keepdim=True), 0, 1).repeat(1, N, 1)
+                mask_windows = torch.clamp(
+                    torch.sum(mask_windows, dim=1, keepdim=True), 0, 1
+                ).repeat(1, N, 1)
         else:
             # ==> pdb.set_trace()
             pass
@@ -148,6 +180,10 @@ class WindowAttention(nn.Module):
         x = self.proj(x)
         return x, mask_windows
 
+    def __repr__(self):
+        s = f"WindowAttention(dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads})"
+        return s
+
 
 # xxxx_debug
 class SwinTransformerBlock(nn.Module):
@@ -156,6 +192,11 @@ class SwinTransformerBlock(nn.Module):
         # dim = 180
         # input_resolution = [64, 64]
         # num_heads = 6
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.shift_size = shift_size
 
         self.input_resolution = input_resolution
         self.window_size = window_size
@@ -165,11 +206,15 @@ class SwinTransformerBlock(nn.Module):
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
-        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+        assert (
+            0 <= self.shift_size < self.window_size
+        ), "shift_size must in 0-window_size"
 
-        self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads)
+        self.attn = WindowAttention(
+            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
+        )
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
-        self.mlp = Mlp(in_features=dim, hidden_features=dim * 2)
+        self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
         # shift_size = 0, window_size=8
         # shift_size = 4, window_size=8
@@ -196,10 +241,14 @@ class SwinTransformerBlock(nn.Module):
                 img_mask[:, h, w, :] = cnt
                 cnt += 1
 
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+        mask_windows = window_partition(
+            img_mask, self.window_size
+        )  # nW, window_size, window_size, 1
         mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
+            attn_mask == 0, float(0.0)
+        )
 
         return attn_mask
 
@@ -213,20 +262,37 @@ class SwinTransformerBlock(nn.Module):
         x = x.view(B, H, W, C)
         if mask is not None:
             mask = mask.view(B, H, W, 1)
+        else:
+            # ==> pdb.set_trace()
+            pass
 
         # cyclic shift
         if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_x = torch.roll(
+                x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+            )
             if mask is not None:
-                shifted_mask = torch.roll(mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+                shifted_mask = torch.roll(
+                    mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+                )
+            else:
+                # =>pdb.set_trace()
+                pass
         else:
             shifted_x = x
             if mask is not None:
                 shifted_mask = mask
+            else:
+                # ==> pdb.set_trace()
+                pass
 
         # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+        x_windows = window_partition(
+            shifted_x, self.window_size
+        )  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(
+            -1, self.window_size * self.window_size, C
+        )  # nW*B, window_size*window_size, C
         if mask is not None:
             # ==> pdb.set_trace()
             mask_windows = window_partition(shifted_mask, self.window_size)
@@ -252,13 +318,23 @@ class SwinTransformerBlock(nn.Module):
 
         # reverse cyclic shift
         if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            x = torch.roll(
+                shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
+            )
             if mask is not None:
-                mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+                mask = torch.roll(
+                    shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
+                )
+            else:
+                # ==> pdb.set_trace()
+                pass
         else:
             x = shifted_x
             if mask is not None:
                 mask = shifted_mask
+            else:
+                # ==> pdb.set_trace()
+                pass
         x = x.view(B, H * W, C)
         if mask is not None:
             mask = mask.view(B, H * W, 1)
@@ -272,19 +348,26 @@ class SwinTransformerBlock(nn.Module):
 
         return x, mask
 
+    def __repr__(self):
+        s = f"SwinTransformerBlock(dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, window_size={self.window_size}, shift_size={self.shift_size})"
+        return s
+
 
 # xxxx_debug
 class PatchMerging(nn.Module):
     def __init__(self, in_channels, out_channels, down=2):
         super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.down = down
+        # self.down === 2
+
         self.conv = Conv2dLayerPartial(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
             down=down,
         )
-        self.down = down
-        # self.down === 2
 
     def forward(self, x, x_size, mask=None):
         x = token2feature(x, x_size)
@@ -308,26 +391,33 @@ class PatchMerging(nn.Module):
 
         return x, x_size, mask
 
+    def __repr__(self):
+        s = f"PatchMerging(in_channels={self.in_channels}, out_channels={self.out_channels}, down={self.down})"
+        return s
+
 
 class PatchIdentity(nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, x, x_size, mask=None):
-        return x
+        return x, x_size, mask
 
 
 # xxxx_debug
 class PatchUpsampling(nn.Module):
     def __init__(self, in_channels, out_channels, up=2):
         super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.up = up  # up === 2
+
         self.conv = Conv2dLayerPartial(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
             up=up,
         )
-        self.up = up  # up === 2
 
     def forward(self, x, x_size, mask=None):
         x = token2feature(x, x_size)
@@ -348,38 +438,26 @@ class PatchUpsampling(nn.Module):
 
         return x, x_size, mask
 
+    def __repr__(self):
+        s = f"PatchUpsampling(in_channels={self.in_channels}, out_channels={self.out_channels}, up={self.up})"
+        return s
+
 
 # xxxx_debug
 class BasicLayer(nn.Module):
-    """A basic Swin Transformer layer for one stage.
-
-    BasicLayer(dim=dim,
-               input_resolution=[res, res],
-               depth=depth,
-               num_heads=num_heads,
-               window_size=window_sizes[i],
-               downsample=merge)
-    """
-
-    def __init__(self, dim, input_resolution, depth, num_heads, window_size, downsample=None):
+    """A basic Swin Transformer layer for one stage."""
+    def __init__(
+        self, dim, input_resolution, depth, num_heads, window_size, downsample
+    ):
         super().__init__()
         # dim = 180
         # input_resolution = [64, 64]
         # depth = 2
         # num_heads = 6
         # window_size = 8
-        # downsample = None
 
-        # pdb.set_trace()
         self.input_resolution = input_resolution
-
-        # patch merging layer
-        if downsample is not None:
-            # ==> pdb.set_trace()
-            self.downsample = downsample
-        else:
-            self.downsample = None
-            # ==> pdb.set_trace()
+        self.downsample = downsample
 
         # build blocks
         self.blocks = nn.ModuleList(
@@ -400,31 +478,67 @@ class BasicLayer(nn.Module):
     def forward(self, x, x_size, mask=None):
         # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
         # x_size === (64, 64)
-        # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.663086
+        # mask === None
 
-        if self.downsample is not None:  # True
-            x, x_size, mask = self.downsample(x, x_size, mask)
-        else:
-            # ==> pdb.set_trace()
-            pass
+        x, x_size, mask = self.downsample(x, x_size, mask)
 
         identity = x
         for blk in self.blocks:
             x, mask = blk(x, x_size, mask)
-        if mask is not None:
-            # ==>
-            mask = token2feature(mask, x_size)
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         x, mask = self.conv(token2feature(x, x_size), mask)
         x = feature2token(x) + identity
-        if mask is not None:
-            mask = feature2token(mask)
-        else:
-            # ==> pdb.set_trace()
-            pass
+
+        return x, x_size, mask
+
+
+class BasicLayerWithMask(nn.Module):
+    """A basic Swin Transformer layer for one stage."""
+
+    def __init__(
+        self, dim, input_resolution, depth, num_heads, window_size, downsample
+    ):
+        super().__init__()
+        # dim = 180
+        # input_resolution = [64, 64]
+        # depth = 2
+        # num_heads = 6
+        # window_size = 8
+
+        self.input_resolution = input_resolution
+        self.downsample = downsample
+
+        # build blocks
+        self.blocks = nn.ModuleList(
+            [
+                SwinTransformerBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=0 if (i % 2 == 0) else window_size // 2,
+                )
+                for i in range(depth)
+            ]
+        )  # depth === 2
+
+        self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
+
+    def forward(self, x, x_size, mask):
+        # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
+        # x_size === (64, 64)
+        # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.663086
+
+        x, x_size, mask = self.downsample(x, x_size, mask)
+
+        identity = x
+        for blk in self.blocks:
+            x, mask = blk(x, x_size, mask)
+
+        mask = token2feature(mask, x_size)
+        x, mask = self.conv(token2feature(x, x_size), mask)
+        x = feature2token(x) + identity
+        mask = feature2token(mask)
 
         return x, x_size, mask
 
@@ -527,9 +641,15 @@ class ToStyle(nn.Module):
         # in_channels = 512
         # out_channels = 1024
         self.conv = nn.Sequential(
-            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
-            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
-            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
+            Conv2dLayer(
+                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
+            ),
+            Conv2dLayer(
+                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
+            ),
+            Conv2dLayer(
+                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
+            ),
         )
 
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -600,7 +720,9 @@ class DecBlockFirstV2(nn.Module):
 # ----------------------------------------------------------------------------
 # xxxx_debug
 class DecBlock(nn.Module):
-    def __init__(self, res, in_channels, out_channels, style_dim, img_channels):  # res = 4, ..., resolution_log2
+    def __init__(
+        self, res, in_channels, out_channels, style_dim, img_channels
+    ):  # res = 4, ..., resolution_log2
         super().__init__()
         self.res = res
         self.conv0 = StyleConvWithNoise(
@@ -649,7 +771,9 @@ class Decoder(nn.Module):
         self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), style_dim, img_channels)
         for res in range(5, res_log2 + 1):
             setattr(
-                self, "Dec_%dx%d" % (2**res, 2**res), DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels)
+                self,
+                "Dec_%dx%d" % (2**res, 2**res),
+                DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels),
             )
         self.res_log2 = res_log2  # 9
         # self.Dec_16x16 -- DecBlockFirstV2
@@ -711,11 +835,17 @@ class FirstStage(nn.Module):
         super().__init__()
         res = 64
 
-        self.conv_first = Conv2dLayerPartial(in_channels=img_channels + 1, out_channels=dim, kernel_size=3)
+        self.conv_first = Conv2dLayerPartial(
+            in_channels=img_channels + 1, out_channels=dim, kernel_size=3
+        )
         self.enc_conv = nn.ModuleList()
         down_time = int(np.log2(img_resolution // res))  # down_time === 3
         for i in range(down_time):  # from input size to 64
-            self.enc_conv.append(Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3, down=2))
+            self.enc_conv.append(
+                Conv2dLayerPartial(
+                    in_channels=dim, out_channels=dim, kernel_size=3, down=2
+                )
+            )
 
         # from 64 -> 16 -> 64
         depths = [2, 3, 4, 3, 2]
@@ -724,31 +854,49 @@ class FirstStage(nn.Module):
         window_sizes = [8, 16, 16, 16, 8]
 
         self.tran = nn.ModuleList()
+        mid = len(depths) // 2  # len(depths) == 5 ==> mid === 2
+
         for i, depth in enumerate(depths):
             res = int(res * ratios[i])
             if ratios[i] < 1:
                 merge = PatchMerging(dim, dim, down=int(1 / ratios[i]))
             elif ratios[i] > 1:
                 merge = PatchUpsampling(dim, dim, up=ratios[i])
-            else:
-                merge = None  # PatchIdentity() # None # ==> ratios[i] === 1
-            self.tran.append(
-                BasicLayer(
-                    dim=dim,
-                    input_resolution=[res, res],
-                    depth=depth,
-                    num_heads=num_heads,
-                    window_size=window_sizes[i],
-                    downsample=merge,
+            else: # ==> ratios[i] === 1
+                merge = PatchIdentity()
+
+            if i < mid:
+                self.tran.append(
+                    BasicLayerWithMask(
+                        dim=dim,
+                        input_resolution=[res, res],
+                        depth=depth,
+                        num_heads=num_heads,
+                        window_size=window_sizes[i],
+                        downsample=merge,
+                    )
                 )
-            )
+            else:
+                self.tran.append(
+                    BasicLayer(
+                        dim=dim,
+                        input_resolution=[res, res],
+                        depth=depth,
+                        num_heads=num_heads,
+                        window_size=window_sizes[i],
+                        downsample=merge,
+                    )
+                )
 
         # global style
         down_conv = []
         for i in range(int(np.log2(16))):
-            down_conv.append(Conv2dLayer(in_channels=dim, out_channels=dim, kernel_size=3, down=2))
+            down_conv.append(
+                Conv2dLayer(in_channels=dim, out_channels=dim, kernel_size=3, down=2)
+            )
         down_conv.append(nn.AdaptiveAvgPool2d((1, 1)))
         self.down_conv = nn.Sequential(*down_conv)
+
         self.to_style = LReLuFC(in_features=dim, out_features=dim * 2)
         self.ws_style = LReLuFC(in_features=w_dim, out_features=dim)
         self.to_square = LReLuFC(in_features=dim, out_features=16 * 16)
@@ -796,10 +944,16 @@ class FirstStage(nn.Module):
                 ws = self.ws_style(ws[:, -1])
                 add_n = self.to_square(ws).unsqueeze(1)
                 add_n = (
-                    F.interpolate(add_n, size=x.size(1), mode="linear", align_corners=False).squeeze(1).unsqueeze(-1)
+                    F.interpolate(
+                        add_n, size=x.size(1), mode="linear", align_corners=False
+                    )
+                    .squeeze(1)
+                    .unsqueeze(-1)
                 )
                 x = x * mul_map + add_n * (1 - mul_map)
-                gs = self.to_style(self.down_conv(token2feature(x, x_size)).flatten(start_dim=1))
+                gs = self.to_style(
+                    self.down_conv(token2feature(x, x_size)).flatten(start_dim=1)
+                )
                 style = torch.cat([gs, ws], dim=1)
         # self.tran -- BasicLayer[0] -- BasicLayer[4]
 
@@ -838,7 +992,9 @@ class SynthesisNet(nn.Module):
         self.num_layers = resolution_log2 * 2 - 3 * 2  # ==> 12
 
         # first stage
-        self.first_stage = FirstStage(img_channels, img_resolution=img_resolution, w_dim=w_dim)
+        self.first_stage = FirstStage(
+            img_channels, img_resolution=img_resolution, w_dim=w_dim
+        )
 
         # second stage
         self.enc = Encoder(resolution_log2, img_channels, patch_size=5, channels=16)
@@ -859,12 +1015,14 @@ class SynthesisNet(nn.Module):
         mul_map = torch.ones_like(fea_16) * 0.5
         mul_map = F.dropout(mul_map, training=True)
         add_n = self.to_square(ws[:, 0]).view(-1, 16, 16).unsqueeze(1)
-        add_n = F.interpolate(add_n, size=fea_16.size()[-2:], mode="bilinear", align_corners=False)
+        add_n = F.interpolate(
+            add_n, size=fea_16.size()[-2:], mode="bilinear", align_corners=False
+        )
         fea_16 = fea_16 * mul_map + add_n * (1 - mul_map)
         e_features[4] = fea_16
 
         # style
-        gs = self.to_style(fea_16)
+        gs = self.to_style(fea_16) # gs === global style ?
 
         # decoder
         img = self.dec(fea_16, ws, gs, e_features)
@@ -888,8 +1046,12 @@ class Generator(nn.Module):
     ):
         super().__init__()
         self.z_dim = z_dim
-        self.synthesis = SynthesisNet(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels)
-        self.mapping = MappingNet(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.synthesis.num_layers)
+        self.synthesis = SynthesisNet(
+            w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels
+        )
+        self.mapping = MappingNet(
+            z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.synthesis.num_layers
+        )
         self.load_weights()
 
     def forward(self, x):
@@ -926,7 +1088,7 @@ def normalize_2nd_moment(x, dim=1, eps=1e-8):
 
 
 # ----------------------------------------------------------------------------
-class MappingNetFC(nn.Module):
+class MappingFC(nn.Module):
     def __init__(
         self,
         in_features=180,  # Number of input features.
@@ -934,6 +1096,10 @@ class MappingNetFC(nn.Module):
     ):
         super().__init__()
         bias_init = 0  # Initial value for the additive bias.
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias_init = bias_init
+
         self.weight = nn.Parameter(torch.randn([out_features, in_features]) / 0.01)
         self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
         self.weight_gain = 0.01 / np.sqrt(in_features)
@@ -948,6 +1114,10 @@ class MappingNetFC(nn.Module):
         out = bias_lrelu(x, b, dim=x.ndim - 1)
         return out
 
+    def __repr__(self):
+        s = f"MappingFC(in_features={self.in_features}, out_features={self.out_features}, bias_init={self.bias_init})"
+        return s
+
 
 class LinearFC(nn.Module):
     def __init__(
@@ -957,6 +1127,10 @@ class LinearFC(nn.Module):
         bias_init=0,  # Initial value for the additive bias.
     ):
         super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias_init = bias_init
+
         self.weight = nn.Parameter(torch.randn([out_features, in_features]))
         self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
         self.weight_gain = 1.0 / np.sqrt(in_features)
@@ -969,6 +1143,9 @@ class LinearFC(nn.Module):
         out = x + b.reshape([-1 if i == x.ndim - 1 else 1 for i in range(x.ndim)])
         return out
 
+    def __repr__(self):
+        s = f"LinearFC(in_features={self.in_features}, out_features={self.out_features}, bias_init={self.bias_init})"
+        return s
 
 class LReLuFC(nn.Module):
     def __init__(
@@ -978,6 +1155,10 @@ class LReLuFC(nn.Module):
         bias_init=0,  # Initial value for the additive bias.
     ):
         super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias_init = bias_init
+
         self.weight = nn.Parameter(torch.randn([out_features, in_features]))
         self.bias = nn.Parameter(torch.full([out_features], np.float32(bias_init)))
         self.weight_gain = 1.0 / np.sqrt(in_features)
@@ -990,6 +1171,9 @@ class LReLuFC(nn.Module):
         out = bias_lrelu(x, b, dim=x.ndim - 1)
         return out
 
+    def __repr__(self):
+        s = f"LReLuFC(in_features={self.in_features}, out_features={self.out_features}, bias_init={self.bias_init})"
+        return s
 
 class Conv2dLayer(nn.Module):
     def __init__(
@@ -1001,25 +1185,38 @@ class Conv2dLayer(nn.Module):
         down=1,  # Integer downsampling factor.
     ):
         super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
         self.up = up
         self.down = down
+
         self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1]))
 
         self.padding = kernel_size // 2
-        self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size**2))
-        self.act_gain = 1.4142135623730951  # bias_act.activation_funcs['lrelu'].def_gain
+        self.weight_gain = 1.0 / np.sqrt(in_channels * (kernel_size**2))
 
         weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size])
         bias = torch.zeros([out_channels])
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
 
-    def forward(self, x, gain=1):
+    def forward(self, x):
         w = self.weight * self.weight_gain
-        x = conv2d_resample(x=x, w=w, f=self.resample_filter, up=self.up, down=self.down, padding=self.padding)
-        act_gain = self.act_gain * gain
+        x = conv2d_resample(
+            x=x,
+            w=w,
+            f=self.resample_filter,
+            up=self.up,
+            down=self.down,
+            padding=self.padding,
+        )
         out = bias_lrelu(x, self.bias)
         return out
+
+    def __repr__(self):
+        s = f"Conv2dLayer(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size}, up={self.up}, down={self.down}"
+        return s
 
 
 class ModulatedConv2d(nn.Module):
@@ -1033,7 +1230,9 @@ class ModulatedConv2d(nn.Module):
         down=1,  # Integer downsampling factor.
     ):
         super().__init__()
-        self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
+        self.weight = nn.Parameter(
+            torch.randn([1, out_channels, in_channels, kernel_size, kernel_size])
+        )
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size**2))
@@ -1049,9 +1248,18 @@ class ModulatedConv2d(nn.Module):
         style = self.affine(style).view(batch, 1, in_channels, 1, 1)
         weight = self.weight * self.weight_gain * style
 
-        weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
+        weight = weight.view(
+            batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
+        )
         x = x.view(1, batch * in_channels, height, width)
-        x = conv2d_resample(x=x, w=weight, f=self.resample_filter, up=self.up, down=self.down, padding=self.padding)
+        x = conv2d_resample(
+            x=x,
+            w=weight,
+            f=self.resample_filter,
+            up=self.up,
+            down=self.down,
+            padding=self.padding,
+        )
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1069,7 +1277,9 @@ class ModulatedConv2dDemodulate(nn.Module):
     ):
         super().__init__()
 
-        self.weight = nn.Parameter(torch.randn([1, out_channels, in_channels, kernel_size, kernel_size]))
+        self.weight = nn.Parameter(
+            torch.randn([1, out_channels, in_channels, kernel_size, kernel_size])
+        )
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size**2))
@@ -1089,9 +1299,18 @@ class ModulatedConv2dDemodulate(nn.Module):
         decoefs = (weight.pow(2).sum(dim=[2, 3, 4]) + 1e-8).rsqrt()
         weight = weight * decoefs.view(batch, self.out_channels, 1, 1, 1)
 
-        weight = weight.view(batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size)
+        weight = weight.view(
+            batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
+        )
         x = x.view(1, batch * in_channels, height, width)
-        x = conv2d_resample(x=x, w=weight, f=self.resample_filter, up=self.up, down=self.down, padding=self.padding)
+        x = conv2d_resample(
+            x=x,
+            w=weight,
+            f=self.resample_filter,
+            up=self.up,
+            down=self.down,
+            padding=self.padding,
+        )
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1115,12 +1334,9 @@ class StyleConv(torch.nn.Module):
             up=up,
         )
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.act_gain = 1.4142135623730951
 
-    def forward(self, x, style, gain=1):
+    def forward(self, x, style):
         x = self.conv(x, style)
-
-        act_gain = self.act_gain * gain
         out = bias_lrelu(x, self.bias)
 
         return out
@@ -1137,7 +1353,6 @@ class StyleConvWithNoise(torch.nn.Module):
         up=1,  # Integer upsampling factor.
     ):
         super().__init__()
-
         self.conv = ModulatedConv2dDemodulate(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -1146,23 +1361,16 @@ class StyleConvWithNoise(torch.nn.Module):
             up=up,
         )
 
-        self.resolution = resolution
+        # self.resolution = resolution
         self.register_buffer("noise_const", torch.randn([resolution, resolution]))
         self.noise_strength = nn.Parameter(torch.zeros([]))
-
         self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.act_gain = 1.4142135623730951
 
-    def forward(self, x, style, gain=1):
+    def forward(self, x, style):
         x = self.conv(x, style)
-
         noise = self.noise_const * self.noise_strength
         x = x + noise
-
-        act_gain = self.act_gain * gain
-        out = bias_lrelu(x, self.bias)
-
-        return out
+        return bias_lrelu(x, self.bias)
 
 
 class ToRGB(torch.nn.Module):
@@ -1187,8 +1395,7 @@ class ToRGB(torch.nn.Module):
 
     def forward(self, x, style, skip=None):
         x = self.conv(x, style)
-        out = bias_linear(x, self.bias)
-        return out
+        return bias_linear(x, self.bias)
 
 
 class ToRGBWithSkip(torch.nn.Module):
@@ -1248,7 +1455,7 @@ class MappingNet(torch.nn.Module):
         for idx in range(num_layers):  # num_layers -- 8
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = MappingNetFC(in_features, out_features)
+            layer = MappingFC(in_features, out_features)
             setattr(self, f"fc{idx}", layer)
 
         self.register_buffer("w_avg", torch.zeros([w_dim]))
@@ -1281,7 +1488,9 @@ class MappingNet(torch.nn.Module):
 # ----------------------------------------------------------------------------
 
 
-def _conv2d_wrapper(x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True):
+def _conv2d_wrapper(
+    x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True
+):
     """Wrapper for the underlying `conv2d()` and `conv_transpose2d()` implementations."""
     # print(f"_conv2d_wrapper groups={groups}, flip_weight={flip_weight}")
     out_channels, in_channels_per_group, kh, kw = w.size()
@@ -1315,10 +1524,12 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
 
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
-    assert f is None or (isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32)
+    assert f is None or (
+        isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32
+    )
     assert isinstance(up, int) and (up >= 1)
     assert isinstance(down, int) and (down >= 1)
-    out_channels, in_channels_per_group, kh, kw = w.size() # [180, 4, 3, 3] ?
+    out_channels, in_channels_per_group, kh, kw = w.size()  # [180, 4, 3, 3] ?
     fw, fh = f.size()
     # fw === 4, fh === 4
 
@@ -1340,7 +1551,9 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
     if kw == 1 and kh == 1 and (down > 1 and up == 1):
         pdb.set_trace()
-        x = upfirdn2d(x=x, f=f, down=[down, down, down, down], padding=[px0, px1, py0, py1])
+        x = upfirdn2d(
+            x=x, f=f, down=[down, down, down, down], padding=[px0, px1, py0, py1]
+        )
         x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
         return x
 
@@ -1368,8 +1581,18 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         py1 -= kh - up
         pxt = max(min(-px0, -px1), 0)
         pyt = max(min(-py0, -py1), 0)
-        x = _conv2d_wrapper(x=x, w=w, stride=up, padding=[pyt, pxt], groups=1, transpose=True, flip_weight=False)
-        x = upfirdn2d(x=x, f=f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2)
+        x = _conv2d_wrapper(
+            x=x,
+            w=w,
+            stride=up,
+            padding=[pyt, pxt],
+            groups=1,
+            transpose=True,
+            flip_weight=False,
+        )
+        x = upfirdn2d(
+            x=x, f=f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2
+        )
         if down > 1:
             x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
         return x
@@ -1377,10 +1600,18 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
     if up == 1 and down == 1:
         if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
-            return _conv2d_wrapper(x=x, w=w, padding=[py0, px0], groups=1, flip_weight=True)
+            return _conv2d_wrapper(
+                x=x, w=w, padding=[py0, px0], groups=1, flip_weight=True
+            )
 
     # Fallback: Generic reference implementation.
-    x = upfirdn2d(x=x, f=(f if up > 1 else None), up=up, padding=[px0, px1, py0, py1], gain=up**2)
+    x = upfirdn2d(
+        x=x,
+        f=(f if up > 1 else None),
+        up=up,
+        padding=[px0, px1, py0, py1],
+        gain=up**2,
+    )
     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
     if down > 1:
         x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
@@ -1392,6 +1623,7 @@ def setup_filter(f):
     f = f.ger(f)
     f /= f.sum()
     return f
+
 
 # ----------------------------------------------------------------------------
 def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
@@ -1414,7 +1646,12 @@ def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
 
     # Pad or crop.
     x = F.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
-    x = x[:, :, max(-pady0, 0) : x.shape[2] - max(-pady1, 0), max(-padx0, 0) : x.shape[3] - max(-padx1, 0)]
+    x = x[
+        :,
+        :,
+        max(-pady0, 0) : x.shape[2] - max(-pady1, 0),
+        max(-padx0, 0) : x.shape[3] - max(-padx1, 0),
+    ]
 
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
@@ -1489,11 +1726,26 @@ def bias_linear(x, b):
 # conv2d_gradfix
 def gradfix_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return F.conv2d(
-        input=input, weight=weight, bias=bias, stride=stride, padding=padding, dilation=dilation, groups=groups
+        input=input,
+        weight=weight,
+        bias=bias,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
     )
 
 
-def gradfix_conv_transpose2d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+def gradfix_conv_transpose2d(
+    input,
+    weight,
+    bias=None,
+    stride=1,
+    padding=0,
+    output_padding=0,
+    groups=1,
+    dilation=1,
+):
     return F.conv_transpose2d(
         input=input,
         weight=weight,

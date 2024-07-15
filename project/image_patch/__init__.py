@@ -70,6 +70,7 @@ def image_predict(input_files, output_dir):
 
     # load model
     model, device = get_patch_model()
+    pdb.set_trace()
 
     # load files
     image_filenames = todos.data.load_files(input_files)
