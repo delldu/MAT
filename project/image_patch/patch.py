@@ -80,7 +80,7 @@ class Conv2dLayerPartial(nn.Module):
 
     def forward(self, x, mask=None):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
-        todos.debug.output_var("Conv2dLayerPartial mask", mask)
+        # todos.debug.output_var("Conv2dLayerPartial mask", mask)
         if mask is not None:
             # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
             # with torch.no_grad():
@@ -438,12 +438,8 @@ class SwinTransBlockWithShift(nn.Module):
             pass
 
         # partition windows
-        x_windows = window_partition(
-            shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
+        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
         if mask is not None:
             # ==> pdb.set_trace()
             mask_windows = window_partition(shifted_mask, self.window_size)
@@ -472,9 +468,7 @@ class SwinTransBlockWithShift(nn.Module):
             shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
         )
         if mask is not None:
-            mask = torch.roll(
-                shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
+            mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             # ==> pdb.set_trace()
             pass
@@ -513,9 +507,9 @@ class PatchMerging(nn.Module):
         )
 
     def forward(self, x, x_size, mask=None):
-        print("PatchMerging forward ...")
-        todos.debug.output_var("x", x)
-        todos.debug.output_var("mask", mask)
+        # print("PatchMerging forward ...")
+        # todos.debug.output_var("x", x)
+        # todos.debug.output_var("mask", mask)
 
         x = token2feature(x, x_size)
         if mask is not None:
@@ -548,10 +542,9 @@ class PatchIdentity(nn.Module):
         super().__init__()
 
     def forward(self, x, x_size, mask):
-        print("PatchIdentity forward ...")
-        todos.debug.output_var("x", x)
-        todos.debug.output_var("mask", mask)
-
+        # print("PatchIdentity forward ...")
+        # todos.debug.output_var("x", x)
+        # todos.debug.output_var("mask", mask)
         return x, x_size, mask
 
 
@@ -640,9 +633,9 @@ class BasicLayer(nn.Module):
         # pdb.set_trace()
 
     def forward(self, x, x_size, mask):
-        print("BasicLayer forward ...")
-        todos.debug.output_var("x", x)
-        todos.debug.output_var("mask", mask)
+        # print("BasicLayer forward ...")
+        # todos.debug.output_var("x", x)
+        # todos.debug.output_var("mask", mask)
 
         # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
         # x_size === (64, 64)
@@ -1042,8 +1035,8 @@ class FirstStage(nn.Module):
         # pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
-        print("FirstStage")
-        todos.debug.output_var("input_mask", input_mask)
+        # print("FirstStage")
+        # todos.debug.output_var("input_mask", input_mask)
 
         x = torch.cat([input_mask - 0.5, input_image * input_mask], dim=1)
 
@@ -1441,7 +1434,6 @@ class ModulatedConv2dD(nn.Module):
             padding=self.padding,
         )
         # todos.debug.output_var("x6", x)
-
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1499,8 +1491,6 @@ class StyleConvWithNoise(torch.nn.Module):
 
     def forward(self, x, style):
         x = self.conv(x, style)
-        # todos.debug.output_var("self.noise_const", self.noise_const)
-        # todos.debug.output_var("self.noise_strength", self.noise_strength) # abs(self.noise_strength) < 0.01
         noise = self.noise_const * self.noise_strength
         x = x + noise
         return bias_lrelu(x, self.bias)
@@ -1614,7 +1604,7 @@ def _conv2d_wrapper(
         pass
 
     # transpose == True | False
-    op = gradfix_conv_transpose2d if transpose else gradfix_conv2d
+    op = F.conv_transpose2d if transpose else F.conv2d
     return op(x, w, stride=stride, padding=padding, groups=groups)
 
 
@@ -1632,13 +1622,6 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # print(f"  conv2d_resample up={up}, down={down}")
     # todos.debug.output_var("w", w)
 
-    # assert isinstance(x, torch.Tensor) and (x.ndim == 4)
-    # assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
-    # assert f is None or (
-    #     isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32
-    # )
-    # assert isinstance(up, int) and (up >= 1)
-    # assert isinstance(down, int) and (down >= 1)
     out_channels, in_channels_per_group, kh, kw = w.size()  # [180, 4, 3, 3] ?
     fw, fh = f.size()
     # fw === 4, fh === 4
@@ -1657,23 +1640,6 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         px1 += (fw - down) // 2
         py0 += (fh - down + 1) // 2
         py1 += (fh - down) // 2
-
-    # # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
-    # if kw == 1 and kh == 1 and (down > 1 and up == 1):
-    #     pdb.set_trace()
-    #     x = upfirdn2d(
-    #         x=x, f=f, down=[down, down, down, down], padding=[px0, px1, py0, py1]
-    #     )
-    #     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-    #     return x
-
-    # # Fast path: 1x1 convolution with upsampling only => convolve first, then upsample.
-    # if kw == 1 and kh == 1 and (up > 1 and down == 1):
-    #     pdb.set_trace()
-
-    #     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-    #     x = upfirdn2d(x=x, f=f, up=up, padding=[px0, px1, py0, py1], gain=up**2)
-    #     return x
 
     # Fast path: downsampling only => use strided convolution.
     if down > 1 and up == 1:
@@ -1770,7 +1736,7 @@ def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
 
     # Convolve with the filter.
     f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim)
-    x = gradfix_conv2d(input=x, weight=f, groups=num_channels)
+    x = F.conv2d(input=x, weight=f, groups=num_channels)
 
     # Downsample by throwing away pixels.
     x = x[:, :, ::down, ::down]
@@ -1797,11 +1763,6 @@ def bias_lrelu(x, b, dim=1):
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
 
     # Add bias.
-    assert isinstance(b, torch.Tensor) and b.ndim == 1
-    assert 0 <= dim < x.ndim
-    assert b.shape[0] == x.shape[dim]
-
-    # print("bias_linear reshape -- ", [-1 if i == dim else 1 for i in range(x.ndim)])
     x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
     # [1, -1], [1, -1, 1, 1], [1, 1, -1],
 
@@ -1822,47 +1783,8 @@ def bias_linear(x, b):
     # act -- linear, alpha= 0.0 gain= 1.0
 
     # Add bias.
-    assert isinstance(b, torch.Tensor) and b.ndim == 1
-    assert 0 <= dim < x.ndim
-    assert b.shape[0] == x.shape[dim]
-
     # print("bias_linear reshape -- ", [-1 if i == dim else 1 for i in range(x.ndim)])
     # x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
     x = x + b.reshape([1, -1, 1, 1])
 
     return x
-
-
-# conv2d_gradfix
-def gradfix_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-    return F.conv2d(
-        input=input,
-        weight=weight,
-        bias=bias,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-    )
-
-
-def gradfix_conv_transpose2d(
-    input,
-    weight,
-    bias=None,
-    stride=1,
-    padding=0,
-    output_padding=0,
-    groups=1,
-    dilation=1,
-):
-    return F.conv_transpose2d(
-        input=input,
-        weight=weight,
-        bias=bias,
-        stride=stride,
-        padding=padding,
-        output_padding=output_padding,
-        groups=groups,
-        dilation=dilation,
-    )
