@@ -75,7 +75,7 @@ class Conv2dLayerPartial(nn.Module):
         self.slide_winsize = kernel_size**2
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
         #  self.slide_winsize -- 9
-        pdb.set_trace()
+        # pdb.set_trace()
 
 
     def forward(self, x, mask=None):
@@ -167,9 +167,7 @@ class WindowAttention(nn.Module):
 
         if mask is not None:
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
         else:
             pdb.set_trace()
@@ -639,7 +637,7 @@ class BasicLayer(nn.Module):
             self.blocks.append(b)
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
-        pdb.set_trace()
+        # pdb.set_trace()
 
     def forward(self, x, x_size, mask):
         print("BasicLayer forward ...")
@@ -748,10 +746,22 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         out = {}
-        for res in self.resolution:
-            res_log2 = int(np.log2(res))  # [9, 8, 7, 6, 5, 4]
-            x = getattr(self, "EncConv_Block_%dx%d" % (res, res))(x)
-            out[res_log2] = x  # [9, 8, 7, 6, 5, 4]
+        # for res in self.resolution:
+        #     res_log2 = int(np.log2(res))  # [9, 8, 7, 6, 5, 4]
+        #     x = getattr(self, "EncConv_Block_%dx%d" % (res, res))(x)
+        #     out[res_log2] = x  # [9, 8, 7, 6, 5, 4]
+        x = self.EncConv_Block_512x512(x)
+        out[9] = x
+        x = self.EncConv_Block_256x256(x)
+        out[8] = x
+        x = self.EncConv_Block_128x128(x)
+        out[7] = x
+        x = self.EncConv_Block_64x64(x)
+        out[6] = x
+        x = self.EncConv_Block_32x32(x)
+        out[5] = x
+        x = self.EncConv_Block_16x16(x)
+        out[4] = x
 
         return out
 
@@ -805,7 +815,7 @@ class DecBlockFirst(nn.Module):
             style_dim=style_dim,
             resolution=2**res,
             kernel_size=3,
-        )
+        )        
         self.toRGB = ToRGB(
             in_channels=out_channels,
             out_channels=img_channels,
@@ -852,6 +862,7 @@ class DecBlock(nn.Module):
             kernel_size=3,
             up=2,
         )
+
         self.conv1 = StyleConvWithNoise(
             in_channels=out_channels,
             out_channels=out_channels,
@@ -859,6 +870,8 @@ class DecBlock(nn.Module):
             resolution=2**res,
             kernel_size=3,
         )
+
+
         self.toRGB = ToRGB(
             in_channels=out_channels,
             out_channels=img_channels,
@@ -929,6 +942,7 @@ class DecStyleBlock(nn.Module):
             style_dim=style_dim,
             kernel_size=3,
         )
+
         self.toRGB = ToRGB(
             in_channels=out_channels,
             out_channels=img_channels,
@@ -1025,7 +1039,7 @@ class FirstStage(nn.Module):
         for i in range(down_time):  # down_time == 3, from 64 to input size
             res = res * 2
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
-        pdb.set_trace()
+        # pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
         print("FirstStage")
@@ -1109,7 +1123,7 @@ class SynthesisNet(nn.Module):
         style_dim = w_dim + nf(2) * 2  # ==> 1536
         self.dec = Decoder(resolution_log2, style_dim, img_channels)
 
-        pdb.set_trace()
+        # pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
         out_stg1 = self.first_stage(input_image, input_mask, ws)
@@ -1305,7 +1319,7 @@ class Conv2dLayer(nn.Module):
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
 
-        pdb.set_trace()
+        # !!! pdb.set_trace() # ==> conv2d_resample error
         
 
     def forward(self, x):
@@ -1485,6 +1499,8 @@ class StyleConvWithNoise(torch.nn.Module):
 
     def forward(self, x, style):
         x = self.conv(x, style)
+        # todos.debug.output_var("self.noise_const", self.noise_const)
+        # todos.debug.output_var("self.noise_strength", self.noise_strength) # abs(self.noise_strength) < 0.01
         noise = self.noise_const * self.noise_strength
         x = x + noise
         return bias_lrelu(x, self.bias)
@@ -1553,7 +1569,7 @@ class MappingNet(torch.nn.Module):
 
         self.register_buffer("w_avg", torch.zeros([w_dim]))
         # self.w_avg.size() -- [512]
-        pdb.set_trace()
+        # pdb.set_trace()
 
     def forward(self, z):
         # tensor [z] size: [1, 512], min: -2.510093, max: 3.06608, mean: 0.064815
@@ -1616,13 +1632,13 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # print(f"  conv2d_resample up={up}, down={down}")
     # todos.debug.output_var("w", w)
 
-    assert isinstance(x, torch.Tensor) and (x.ndim == 4)
-    assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
-    assert f is None or (
-        isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32
-    )
-    assert isinstance(up, int) and (up >= 1)
-    assert isinstance(down, int) and (down >= 1)
+    # assert isinstance(x, torch.Tensor) and (x.ndim == 4)
+    # assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
+    # assert f is None or (
+    #     isinstance(f, torch.Tensor) and f.ndim in [1, 2] and f.dtype == torch.float32
+    # )
+    # assert isinstance(up, int) and (up >= 1)
+    # assert isinstance(down, int) and (down >= 1)
     out_channels, in_channels_per_group, kh, kw = w.size()  # [180, 4, 3, 3] ?
     fw, fh = f.size()
     # fw === 4, fh === 4
@@ -1642,22 +1658,22 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         py0 += (fh - down + 1) // 2
         py1 += (fh - down) // 2
 
-    # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
-    if kw == 1 and kh == 1 and (down > 1 and up == 1):
-        pdb.set_trace()
-        x = upfirdn2d(
-            x=x, f=f, down=[down, down, down, down], padding=[px0, px1, py0, py1]
-        )
-        x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-        return x
+    # # Fast path: 1x1 convolution with downsampling only => downsample first, then convolve.
+    # if kw == 1 and kh == 1 and (down > 1 and up == 1):
+    #     pdb.set_trace()
+    #     x = upfirdn2d(
+    #         x=x, f=f, down=[down, down, down, down], padding=[px0, px1, py0, py1]
+    #     )
+    #     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
+    #     return x
 
-    # Fast path: 1x1 convolution with upsampling only => convolve first, then upsample.
-    if kw == 1 and kh == 1 and (up > 1 and down == 1):
-        pdb.set_trace()
+    # # Fast path: 1x1 convolution with upsampling only => convolve first, then upsample.
+    # if kw == 1 and kh == 1 and (up > 1 and down == 1):
+    #     pdb.set_trace()
 
-        x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
-        x = upfirdn2d(x=x, f=f, up=up, padding=[px0, px1, py0, py1], gain=up**2)
-        return x
+    #     x = _conv2d_wrapper(x=x, w=w, groups=1, flip_weight=True)
+    #     x = upfirdn2d(x=x, f=f, up=up, padding=[px0, px1, py0, py1], gain=up**2)
+    #     return x
 
     # Fast path: downsampling only => use strided convolution.
     if down > 1 and up == 1:
