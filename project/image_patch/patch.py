@@ -78,22 +78,34 @@ class Conv2dLayerPartial(nn.Module):
 
     def forward(self, x, mask=None):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
+        todos.debug.output_var("Conv2dLayerPartial mask", mask)
         if mask is not None:
             # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
-            # ==> pdb.set_trace()
-            with torch.no_grad():
-                if self.weight_maskUpdater.type() != x.type():
-                    self.weight_maskUpdater = self.weight_maskUpdater.to(x)
-                update_mask = F.conv2d(
-                    mask,
-                    self.weight_maskUpdater,
-                    bias=None,
-                    stride=self.down,
-                    padding=self.padding,
-                )
-                mask_ratio = self.slide_winsize / (update_mask + 1e-8)
-                update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
-                mask_ratio = torch.mul(mask_ratio, update_mask)
+            # with torch.no_grad():
+            #     if self.weight_maskUpdater.type() != x.type():
+            #         self.weight_maskUpdater = self.weight_maskUpdater.to(x)
+            #     update_mask = F.conv2d(
+            #         mask,
+            #         self.weight_maskUpdater,
+            #         bias=None,
+            #         stride=self.down,
+            #         padding=self.padding,
+            #     )
+            #     mask_ratio = self.slide_winsize / (update_mask + 1e-8)
+            #     update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
+            #     mask_ratio = torch.mul(mask_ratio, update_mask)
+            self.weight_maskUpdater = self.weight_maskUpdater.to(x)
+            update_mask = F.conv2d(
+                mask,
+                self.weight_maskUpdater,
+                bias=None,
+                stride=self.down,
+                padding=self.padding,
+            )
+            mask_ratio = self.slide_winsize / (update_mask + 1e-8)
+            update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
+            mask_ratio = torch.mul(mask_ratio, update_mask)
+
             x = self.conv(x)
             x = torch.mul(x, mask_ratio)
             return x, update_mask
@@ -484,8 +496,6 @@ class SwinTransBlockWithShift(nn.Module):
         s = f"SwinTransBlockWithShift(dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, window_size={self.window_size}, shift_size={self.shift_size})"
         return s
 
-
-
 # xxxx_debug
 class PatchMerging(nn.Module):
     def __init__(self, in_channels, out_channels, down=2):
@@ -503,6 +513,10 @@ class PatchMerging(nn.Module):
         )
 
     def forward(self, x, x_size, mask=None):
+        print("PatchMerging forward ...")
+        todos.debug.output_var("x", x)
+        todos.debug.output_var("mask", mask)
+
         x = token2feature(x, x_size)
         if mask is not None:
             # ==> pdb.set_trace()
@@ -534,6 +548,10 @@ class PatchIdentity(nn.Module):
         super().__init__()
 
     def forward(self, x, x_size, mask):
+        print("PatchIdentity forward ...")
+        todos.debug.output_var("x", x)
+        todos.debug.output_var("mask", mask)
+
         return x, x_size, mask
 
 
@@ -553,6 +571,10 @@ class PatchUpsampling(nn.Module):
         )
 
     def forward(self, x, x_size, mask=None):
+        # print("PatchUpsampling forward ...")
+        # todos.debug.output_var("x", x)
+        # todos.debug.output_var("mask", mask)
+
         x = token2feature(x, x_size)
         if mask is not None:
             mask = token2feature(mask, x_size)
@@ -578,62 +600,6 @@ class PatchUpsampling(nn.Module):
 
 # xxxx_debug
 class BasicLayer(nn.Module):
-    """A basic Swin Transformer layer for one stage."""
-    def __init__(
-        self, dim, input_resolution, depth, num_heads, window_size, downsample
-    ):
-        super().__init__()
-        # dim = 180
-        # input_resolution = [64, 64]
-        # depth = 2
-        # num_heads = 6
-        # window_size = 8
-
-        self.input_resolution = input_resolution
-        self.downsample = downsample
-
-        # build blocks
-        self.blocks = nn.ModuleList()
-        for i in range(depth): # depth === 2
-            if i % 2 == 0 or min(input_resolution) <= window_size:
-                b = SwinTransBlock(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    # shift_size=0,
-                )
-            else:
-                b = SwinTransBlockWithShift(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    shift_size=window_size // 2,
-                )
-
-            self.blocks.append(b)
-        
-        self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
-
-    def forward(self, x, x_size, mask=None):
-        # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
-        # x_size === (64, 64)
-        # mask === None
-
-        x, x_size, mask = self.downsample(x, x_size, mask)
-
-        identity = x
-        for blk in self.blocks:
-            x, mask = blk(x, x_size, mask)
-
-        x, mask = self.conv(token2feature(x, x_size), mask)
-        x = feature2token(x) + identity
-
-        return x, x_size, mask
-
-
-class BasicLayerWithMask(nn.Module):
     """A basic Swin Transformer layer for one stage."""
 
     def __init__(
@@ -675,6 +641,10 @@ class BasicLayerWithMask(nn.Module):
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
 
     def forward(self, x, x_size, mask):
+        print("BasicLayer forward ...")
+        todos.debug.output_var("x", x)
+        todos.debug.output_var("mask", mask)
+
         # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
         # x_size === (64, 64)
         # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.663086
@@ -685,10 +655,14 @@ class BasicLayerWithMask(nn.Module):
         for blk in self.blocks:
             x, mask = blk(x, x_size, mask)
 
-        mask = token2feature(mask, x_size)
-        x, mask = self.conv(token2feature(x, x_size), mask)
-        x = feature2token(x) + identity
-        mask = feature2token(mask)
+        if mask is not None:
+            mask = token2feature(mask, x_size)
+            x, mask = self.conv(token2feature(x, x_size), mask)
+            x = feature2token(x) + identity
+            mask = feature2token(mask)
+        else:
+            x, mask = self.conv(token2feature(x, x_size), mask)
+            x = feature2token(x) + identity            
 
         return x, x_size, mask
 
@@ -1013,7 +987,7 @@ class FirstStage(nn.Module):
 
             if i < mid:
                 self.tran.append(
-                    BasicLayerWithMask(
+                    BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
                         depth=depth,
@@ -1055,6 +1029,9 @@ class FirstStage(nn.Module):
         # pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
+        print("FirstStage")
+        todos.debug.output_var("input_mask", input_mask)
+
         x = torch.cat([input_mask - 0.5, input_image * input_mask], dim=1)
 
         skips = []
