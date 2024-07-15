@@ -103,10 +103,9 @@ class Conv2dLayerPartial(nn.Module):
                 stride=self.down,
                 padding=self.padding,
             )
-            mask_ratio = self.slide_winsize / (update_mask + 1e-8)
-            update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
+            mask_ratio = float(self.slide_winsize) / (update_mask + 1e-8)
+            update_mask = torch.clamp(update_mask, 0.0, 1.0)  # 0 or 1
             mask_ratio = torch.mul(mask_ratio, update_mask)
-
             x = self.conv(x)
             x = torch.mul(x, mask_ratio)
             return x, update_mask
@@ -139,11 +138,6 @@ class WindowAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, mask_windows=None, mask=None):
-        """
-        Args:
-            x: input features with shape of (num_windows*B, N, C)
-            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
-        """
         B_, N, C = x.shape
         norm_x = F.normalize(x, p=2.0, dim=-1)
         q = (
@@ -216,9 +210,6 @@ class SwinTransBlock(nn.Module):
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
-        assert (
-            0 <= self.shift_size < self.window_size
-        ), "shift_size must in 0-window_size"
 
         self.attn = WindowAttention(
             dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
@@ -226,7 +217,7 @@ class SwinTransBlock(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
-        assert (self.shift_size == 0)
+        # assert (self.shift_size == 0)
 
         # shift_size = 0, window_size=8
         # shift_size = 4, window_size=8
@@ -268,7 +259,6 @@ class SwinTransBlock(nn.Module):
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
-        assert L == H * W, "input feature has wrong size"
 
         shortcut = x
         x = x.view(B, H, W, C)
@@ -361,9 +351,6 @@ class SwinTransBlockWithShift(nn.Module):
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
-        assert (
-            0 <= self.shift_size < self.window_size
-        ), "shift_size must in 0-window_size"
 
         self.attn = WindowAttention(
             dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
@@ -371,7 +358,7 @@ class SwinTransBlockWithShift(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
-        assert (self.shift_size > 0)
+        # assert (self.shift_size > 0)
 
         # shift_size = 0, window_size=8
         # shift_size = 4, window_size=8
@@ -414,7 +401,6 @@ class SwinTransBlockWithShift(nn.Module):
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
-        assert L == H * W, "input feature has wrong size"
 
         shortcut = x
         x = x.view(B, H, W, C)
@@ -519,8 +505,9 @@ class PatchMerging(nn.Module):
             pass
 
         x, mask = self.conv(x, mask)
-        ratio = 1 / self.down  # self.down === 2
-        x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
+        # ratio = 1 / self.down  # self.down === 2
+        # x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
+        x_size = (x_size[0]//2, x_size[1]//2)
 
         x = feature2token(x)
         if mask is not None:
@@ -541,9 +528,6 @@ class PatchIdentity(nn.Module):
         super().__init__()
 
     def forward(self, x, x_size, mask):
-        # print("PatchIdentity forward ...")
-        # todos.debug.output_var("x", x)
-        # todos.debug.output_var("mask", mask)
         return x, x_size, mask
 
 
@@ -575,7 +559,9 @@ class PatchUpsampling(nn.Module):
             pass
 
         x, mask = self.conv(x, mask)
-        x_size = (int(x_size[0] * self.up), int(x_size[1] * self.up))
+        # x_size = (int(x_size[0] * self.up), int(x_size[1] * self.up))
+        x_size = (x_size[0] * self.up, x_size[1] * self.up)
+
         x = feature2token(x)
         if mask is not None:
             mask = feature2token(mask)
@@ -861,7 +847,6 @@ class DecBlock(nn.Module):
             resolution=2**res,
             kernel_size=3,
         )
-
 
         self.toRGB = ToRGB(
             in_channels=out_channels,
@@ -1637,8 +1622,12 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
         px1 -= kw - up
         py0 -= kh - 1
         py1 -= kh - up
-        pxt = max(min(-px0, -px1), 0)
-        pyt = max(min(-py0, -py1), 0)
+
+        # print("conv2d_resample --- ", px0, px1, py0, py1) # 1 1 1 1
+        # pxt = max(min(-px0, -px1), 0)
+        # pyt = max(min(-py0, -py1), 0)
+        pxt = 0
+        pyt = 0
 
         w = w.flip([2, 3])
         x = F.conv_transpose2d(x, w, stride=up, padding=[pyt, pxt], groups=1)
@@ -1679,65 +1668,23 @@ def setup_filter(f):
 
 
 # ----------------------------------------------------------------------------
-def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
+def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1.0):
     r"""Pad, upsample, filter, and downsample a batch of 2D images."""
-    # assert isinstance(x, torch.Tensor) and x.ndim == 4
-    # if f is None:
-    #     pdb.set_trace()
-    #     f = torch.ones([1, 1], dtype=torch.float32, device=x.device)
-
-    # assert isinstance(f, torch.Tensor) and f.ndim in [1, 2]
-    # assert f.dtype == torch.float32 and not f.requires_grad
-
-    # print("upfirdn2d ------ {")
-    # todos.debug.output_var("x", x)
-    # todos.debug.output_var("f", f)
-    # todos.debug.output_var("up", up)
-    # todos.debug.output_var("down", down)
-    # todos.debug.output_var("padding", padding)
-    # todos.debug.output_var("gain", gain)
-    # print("upfirdn2d ------ }")
 
     batch_size, num_channels, in_height, in_width = x.size()
     padx0, padx1, pady0, pady1 = padding
 
     # Upsample by inserting zeros.
-    assert up == 1
-    # x = x.reshape([batch_size, num_channels, in_height, 1, in_width, 1])
-    # x = F.pad(x, [0, up - 1, 0, 0, 0, up - 1])
-    # x = x.reshape(batch_size, num_channels, in_height * up, in_width * up)
-
-    # Pad or crop.
-    # tensor [x] size: [1, 180, 512, 512], min: -8.107638, max: 20.929657, mean: 0.010813
-
-
-    # x = F.pad(x, [max(padx0, 0), max(padx1, 0), max(pady0, 0), max(pady1, 0)])
     x = F.pad(x, [padx0, padx1, pady0, pady1])
-
-    # [2, 2, 2, 2]
-    # tensor [x] size: [1, 180, 516, 516], min: -8.107638, max: 20.929657, mean: 0.010646
-    # xxxx_1111
-    # x = x[:, :,
-    #     max(-pady0, 0) : x.shape[2] - max(-pady1, 0),
-    #     max(-padx0, 0) : x.shape[3] - max(-padx1, 0),
-    # ]
-    # tensor [x] size: [1, 180, 516, 516], min: -8.107638, max: 20.929657, mean: 0.010646
 
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
-    # f = f.to(x.dtype)
     f = f.flip([0, 1]) #list(range(f.ndim)))
 
     # Convolve with the filter.
-    # f.size() -- [4, 4]
-    # f = f[np.newaxis, np.newaxis].repeat([num_channels, 1] + [1] * f.ndim) # [180, 1, 1, 1]
     f = f.repeat([num_channels, 1, 1, 1]) # [180, 1, 1, 1]
     x = F.conv2d(input=x, weight=f, groups=num_channels)
-    # tensor [x] size: [1, 180, 513, 513], min: -3.266338, max: 8.514344, mean: 0.010787
-
-    # Downsample by throwing away pixels.
     x = x[:, :, ::down, ::down]
-    # tensor [x] size: [1, 180, 513, 513], min: -3.266338, max: 8.514344, mean: 0.010787
 
     return x
 
@@ -1757,10 +1704,8 @@ def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
 
 def bias_lrelu(x, b, dim=1):
     r"""Fused bias and activation function."""
-    assert isinstance(x, torch.Tensor)
 
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
-
     # Add bias.
     x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
     # [1, -1], [1, -1, 1, 1], [1, 1, -1],
@@ -1771,16 +1716,12 @@ def bias_lrelu(x, b, dim=1):
 
     # Scale by gain.
     x = x * 1.4142135623730951
-
     return x
 
 
 def bias_linear(x, b):
     r"""Fused bias and activation function."""
-    dim = 1
-    assert isinstance(x, torch.Tensor)
-    # act -- linear, alpha= 0.0 gain= 1.0
-
+    # dim = 1
     # Add bias.
     # print("bias_linear reshape -- ", [-1 if i == dim else 1 for i in range(x.ndim)])
     # x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
