@@ -77,7 +77,6 @@ class Conv2dLayerPartial(nn.Module):
         #  self.slide_winsize -- 9
         # pdb.set_trace()
 
-
     def forward(self, x, mask=None):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
         if mask is not None:
@@ -107,7 +106,9 @@ class Conv2dLayerPartial(nn.Module):
             update_mask = torch.clamp(update_mask, 0.0, 1.0)  # 0 or 1
             mask_ratio = torch.mul(mask_ratio, update_mask)
             x = self.conv(x)
-            x = torch.mul(x, mask_ratio)
+            # x = torch.mul(x, mask_ratio)
+            x = x.mul(mask_ratio)
+
             return x, update_mask
         else:
             # ==> pdb.set_trace()
@@ -117,7 +118,6 @@ class Conv2dLayerPartial(nn.Module):
     def __repr__(self):
         s = f"Conv2dLayerPartial(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},up={self.up}, down={self.down})"
         return s
-
 
 # xxxx_debug
 class WindowAttention(nn.Module):
@@ -910,6 +910,7 @@ class StyleConv(torch.nn.Module):
         up=1,  # Integer upsampling factor.
     ):
         super().__init__()
+        self.out_channels = out_channels
         self.conv = ModulatedConv2dD(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -921,9 +922,9 @@ class StyleConv(torch.nn.Module):
 
     def forward(self, x, style):
         x = self.conv(x, style)
-        out = bias_lrelu(x, self.bias)
+        x = x + self.bias.reshape([1, self.out_channels, 1, 1])
+        return F.leaky_relu(x, 0.2) * 1.4142135623730951
 
-        return out
 
 class DecStyleBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
@@ -978,9 +979,7 @@ class FirstStage(nn.Module):
         down_time = int(np.log2(img_resolution // res))  # down_time === 3
         for i in range(down_time):  # from input size to 64
             self.enc_conv.append(
-                Conv2dLayerPartial(
-                    in_channels=dim, out_channels=dim, kernel_size=3, down=2
-                )
+                Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3, down=2)
             )
 
         # from 64 -> 16 -> 64
@@ -1232,7 +1231,10 @@ class MappingFC(nn.Module):
         b = b * self.bias_gain
 
         x = x.matmul(w.t())
-        out = bias_lrelu(x, b, dim=x.ndim - 1)
+
+        out = x + b.reshape([1, self.out_features])
+        out = F.leaky_relu(out, 0.2) * 1.4142135623730951
+
         return out
 
     def __repr__(self):
@@ -1260,7 +1262,7 @@ class LinearFC(nn.Module):
         w = self.weight * self.weight_gain
         b = self.bias
         x = x.matmul(w.t())
-        # print("LinearFC reshape: ", [-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
+        print("LinearFC reshape: ", [-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
         out = x + b.reshape([-1 if i == x.ndim - 1 else 1 for i in range(x.ndim)])
         return out
 
@@ -1289,6 +1291,8 @@ class LReLuFC(nn.Module):
         b = self.bias
 
         x = x.matmul(w.t())
+
+        # todos.debug.output_var("LReLuFC x", x)
         out = bias_lrelu(x, b, dim=x.ndim - 1)
         return out
 
@@ -1335,10 +1339,8 @@ class Conv2dLayer(nn.Module):
             down=self.down, # 2 | 1
             padding=self.padding,
         )
-        # todos.debug.output_var("x2", x)
-
-        out = bias_lrelu(x, self.bias)
-        return out
+        x = x + self.bias.reshape([1, self.out_channels, 1, 1])
+        return F.leaky_relu(x, 0.2) * 1.4142135623730951
 
     def __repr__(self):
         s = f"Conv2dLayer(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size}, up={self.up}, down={self.down}"
@@ -1445,6 +1447,8 @@ class StyleConvWithNoise(torch.nn.Module):
         up=1,  # Integer upsampling factor.
     ):
         super().__init__()
+        self.out_channels = out_channels
+
         self.conv = ModulatedConv2dD(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -1462,7 +1466,9 @@ class StyleConvWithNoise(torch.nn.Module):
         x = self.conv(x, style)
         noise = self.noise_const * self.noise_strength
         x = x + noise
-        return bias_lrelu(x, self.bias)
+        x = x + self.bias.reshape([1, self.out_channels, 1, 1])
+        return F.leaky_relu(x, 0.2) * 1.4142135623730951
+
 
 class ToRGB(torch.nn.Module):
     def __init__(
@@ -1474,6 +1480,7 @@ class ToRGB(torch.nn.Module):
     ):
         super().__init__()
 
+        self.out_channels = out_channels
         self.conv = ModulatedConv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -1486,12 +1493,9 @@ class ToRGB(torch.nn.Module):
 
     def forward(self, x, style, skip):
         x = self.conv(x, style)
-        out = bias_linear(x, self.bias)
-        # if skip is not None:
-        #     # if skip.shape != out.shape:
-        #     #     # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
-        #     #     skip = upsample2d(skip, self.resample_filter)
-        #     #     out = out + skip
+        # out = bias_linear(x, self.bias)
+        out = x + self.bias.reshape([1, self.out_channels, 1, 1])
+
         B, C, H, W = out.size()
         skip = F.interpolate(skip, size=(H, W), mode="bilinear", align_corners=False)
         out = out + skip
@@ -1689,42 +1693,22 @@ def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1.0):
     return x
 
 
-# def upsample2d(x, f, up=2, padding=0, gain=1):
-#     r"""Upsample a batch of 2D images using the given 2D FIR filter."""
-
-#     fw, fh = f.size()
-#     p = [
-#         padding + (fw + up - 1) // 2,
-#         padding + (fw - up) // 2,
-#         padding + (fh + up - 1) // 2,
-#         padding + (fh - up) // 2,
-#     ]
-#     return upfirdn2d(x, f, up=up, padding=p, gain=gain * up * up)
-
-
 def bias_lrelu(x, b, dim=1):
     r"""Fused bias and activation function."""
 
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
     # Add bias.
+
+    print("bias_lrelu", "dim=", dim, [-1 if i == dim else 1 for i in range(x.ndim)])
+
     x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
     # [1, -1], [1, -1, 1, 1], [1, 1, -1],
 
     # Evaluate activation function.
-    alpha = 0.2
-    x = nn.functional.leaky_relu(x, alpha)
+    # alpha = 0.2
+    x = F.leaky_relu(x, 0.2) * 1.4142135623730951
 
-    # Scale by gain.
-    x = x * 1.4142135623730951
+    # # Scale by gain.
+    # x = x * 1.4142135623730951
     return x
 
-
-def bias_linear(x, b):
-    r"""Fused bias and activation function."""
-    # dim = 1
-    # Add bias.
-    # print("bias_linear reshape -- ", [-1 if i == dim else 1 for i in range(x.ndim)])
-    # x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
-    x = x + b.reshape([1, -1, 1, 1])
-
-    return x
