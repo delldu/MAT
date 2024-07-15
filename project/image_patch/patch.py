@@ -185,7 +185,6 @@ class WindowAttention(nn.Module):
         return s
 
 
-# xxxx_debug
 class SwinTransBlock(nn.Module):
     def __init__(self, dim, input_resolution, num_heads, window_size=8, shift_size=0):
         super().__init__()
@@ -215,6 +214,8 @@ class SwinTransBlock(nn.Module):
         )
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
+
+        assert (self.shift_size == 0)
 
         # shift_size = 0, window_size=8
         # shift_size = 4, window_size=8
@@ -253,11 +254,6 @@ class SwinTransBlock(nn.Module):
         return attn_mask
 
     def forward(self, x, x_size, mask=None):
-        if mask is not None:
-            print(f"SwinTransBlock shift_size={self.shift_size}, mask = {mask.size()}")
-        else:
-            print(f"SwinTransBlock shift_size={self.shift_size}, mask = None")
-
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
@@ -271,25 +267,13 @@ class SwinTransBlock(nn.Module):
             # ==> pdb.set_trace()
             pass
 
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(
-                x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
-            if mask is not None:
-                shifted_mask = torch.roll(
-                    mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-                )
-            else:
-                # =>pdb.set_trace()
-                pass
+        # no cyclic shift
+        shifted_x = x
+        if mask is not None:
+            shifted_mask = mask
         else:
-            shifted_x = x
-            if mask is not None:
-                shifted_mask = mask
-            else:
-                # ==> pdb.set_trace()
-                pass
+            # ==> pdb.set_trace()
+            pass
 
         # partition windows
         x_windows = window_partition(
@@ -321,25 +305,14 @@ class SwinTransBlock(nn.Module):
             # pdb.set_trace()
             pass
 
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(
-                shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
-            if mask is not None:
-                mask = torch.roll(
-                    shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-                )
-            else:
-                # ==> pdb.set_trace()
-                pass
+        # no cyclic shift
+        x = shifted_x
+        if mask is not None:
+            mask = shifted_mask
         else:
-            x = shifted_x
-            if mask is not None:
-                mask = shifted_mask
-            else:
-                # ==> pdb.set_trace()
-                pass
+            # ==> pdb.set_trace()
+            pass
+
         x = x.view(B, H * W, C)
         if mask is not None:
             mask = mask.view(B, H * W, 1)
@@ -387,6 +360,8 @@ class SwinTransBlockWithShift(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
+        assert (self.shift_size > 0)
+
         # shift_size = 0, window_size=8
         # shift_size = 4, window_size=8
         # shift_size = 0, window_size=16
@@ -396,6 +371,7 @@ class SwinTransBlockWithShift(nn.Module):
         # calculate attention mask for SW-MSA
         H, W = x_size
         img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+        # slice(start, stop, step)
         h_slices = (
             slice(0, -self.window_size),
             slice(-self.window_size, -self.shift_size),
@@ -424,11 +400,6 @@ class SwinTransBlockWithShift(nn.Module):
         return attn_mask
 
     def forward(self, x, x_size, mask=None):
-        if mask is not None:
-            print(f"SwinTransBlock shift_size={self.shift_size}, mask = {mask.size()}")
-        else:
-            print(f"SwinTransBlock shift_size={self.shift_size}, mask = None")
-
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
@@ -443,24 +414,16 @@ class SwinTransBlockWithShift(nn.Module):
             pass
 
         # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(
-                x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+        shifted_x = torch.roll(
+            x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+        )
+        if mask is not None:
+            shifted_mask = torch.roll(
+                mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
             )
-            if mask is not None:
-                shifted_mask = torch.roll(
-                    mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-                )
-            else:
-                # =>pdb.set_trace()
-                pass
         else:
-            shifted_x = x
-            if mask is not None:
-                shifted_mask = mask
-            else:
-                # ==> pdb.set_trace()
-                pass
+            # =>pdb.set_trace()
+            pass
 
         # partition windows
         x_windows = window_partition(
@@ -493,24 +456,17 @@ class SwinTransBlockWithShift(nn.Module):
             pass
 
         # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(
-                shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
+        x = torch.roll(
+            shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
+        )
+        if mask is not None:
+            mask = torch.roll(
+                shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
             )
-            if mask is not None:
-                mask = torch.roll(
-                    shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-                )
-            else:
-                # ==> pdb.set_trace()
-                pass
         else:
-            x = shifted_x
-            if mask is not None:
-                mask = shifted_mask
-            else:
-                # ==> pdb.set_trace()
-                pass
+            # ==> pdb.set_trace()
+            pass
+
         x = x.view(B, H * W, C)
         if mask is not None:
             mask = mask.view(B, H * W, 1)
@@ -577,7 +533,7 @@ class PatchIdentity(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, x_size, mask=None):
+    def forward(self, x, x_size, mask):
         return x, x_size, mask
 
 
@@ -632,8 +588,6 @@ class BasicLayer(nn.Module):
         # depth = 2
         # num_heads = 6
         # window_size = 8
-
-        print("BasicLayer -- ", input_resolution, window_size)
 
         self.input_resolution = input_resolution
         self.downsample = downsample
@@ -691,8 +645,6 @@ class BasicLayerWithMask(nn.Module):
         # depth = 2
         # num_heads = 6
         # window_size = 8
-
-        print("BasicLayerWithMask -- ", input_resolution, window_size)
 
         self.input_resolution = input_resolution
         self.downsample = downsample
@@ -839,15 +791,9 @@ class ToStyle(nn.Module):
         # in_channels = 512
         # out_channels = 1024
         self.conv = nn.Sequential(
-            Conv2dLayer(
-                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
-            ),
-            Conv2dLayer(
-                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
-            ),
-            Conv2dLayer(
-                in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2
-            ),
+            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
+            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
+            Conv2dLayer(in_channels=in_channels, out_channels=in_channels, kernel_size=3, down=2),
         )
 
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -864,7 +810,7 @@ class ToStyle(nn.Module):
 
 
 # xxxx_debug
-class DecBlockFirstV2(nn.Module):
+class DecBlockFirst(nn.Module):
     def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
         super().__init__()
         # res = 4
@@ -908,7 +854,8 @@ class DecBlockFirstV2(nn.Module):
         style = get_style_code(ws[:, 0], gs)  # ws[:, 0].size() -- [1, 512]
         x = self.conv1(x, style)
         style = get_style_code(ws[:, 1], gs)
-        img = self.toRGB(x, style, skip=None)
+        fake_skip = torch.zeros((1, 3, 16, 16)).to(x.device)
+        img = self.toRGB(x, style, skip=fake_skip) # fake_skip = None
 
         # tensor [x] size: [1, 512, 16, 16], min: -14.745468, max: 52.303444, mean: -0.170848
         # tensor [img] size: [1, 3, 16, 16], min: -0.003557, max: 0.002705, mean: -0.000736
@@ -938,7 +885,7 @@ class DecBlock(nn.Module):
             resolution=2**res,
             kernel_size=3,
         )
-        self.toRGB = ToRGBWithSkip(
+        self.toRGB = ToRGB(
             in_channels=out_channels,
             out_channels=img_channels,
             style_dim=style_dim,
@@ -951,12 +898,12 @@ class DecBlock(nn.Module):
         style = get_style_code(ws[:, self.res * 2 - 8], gs)
         x = self.conv1(x, style)
         style = get_style_code(ws[:, self.res * 2 - 7], gs)
+
         img = self.toRGB(x, style, skip=img)
 
         return x, img
 
 
-# xxxx_debug
 class Decoder(nn.Module):
     def __init__(
         self,
@@ -966,7 +913,7 @@ class Decoder(nn.Module):
         img_channels=3,
     ):
         super().__init__()
-        self.Dec_16x16 = DecBlockFirstV2(4, nf(4), nf(4), style_dim, img_channels)
+        self.Dec_16x16 = DecBlockFirst(4, nf(4), nf(4), style_dim, img_channels)
         for res in range(5, res_log2 + 1):
             setattr(
                 self,
@@ -974,17 +921,18 @@ class Decoder(nn.Module):
                 DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels),
             )
         self.res_log2 = res_log2  # 9
-        # self.Dec_16x16 -- DecBlockFirstV2
-        # Dec_32x32 -- DecBlock
-        # Dec_64x64 -- DecBlock
-        # ...
-        # Dec_512x512 -- DecBlock
+
 
     def forward(self, x, ws, gs, e_features):
         x, img = self.Dec_16x16(x, ws, gs, e_features)
-        for res in range(5, self.res_log2 + 1):
-            block = getattr(self, "Dec_%dx%d" % (2**res, 2**res))
-            x, img = block(x, img, ws, gs, e_features)
+        # for res in range(5, self.res_log2 + 1):
+        #     block = getattr(self, "Dec_%dx%d" % (2**res, 2**res))
+        #     x, img = block(x, img, ws, gs, e_features)
+        x, img = self.Dec_32x32(x, img, ws, gs, e_features)
+        x, img = self.Dec_64x64(x, img, ws, gs, e_features)
+        x, img = self.Dec_128x128(x, img, ws, gs, e_features)
+        x, img = self.Dec_256x256(x, img, ws, gs, e_features)
+        x, img = self.Dec_512x512(x, img, ws, gs, e_features)
 
         return img
 
@@ -1007,17 +955,30 @@ class DecStyleBlock(nn.Module):
             style_dim=style_dim,
             kernel_size=3,
         )
-        self.toRGB = ToRGBWithSkip(
+        self.toRGB = ToRGB(
             in_channels=out_channels,
             out_channels=img_channels,
             style_dim=style_dim,
         )
 
+
     def forward(self, x, img, style, skip):
+        print("DecStyleBlock ------{")
+        todos.debug.output_var("x", x)
+        todos.debug.output_var("img", img)
+        todos.debug.output_var("style", style)
+        todos.debug.output_var("skip", skip)
+        print("DecStyleBlock ------}")
+
         x = self.conv0(x, style)
         x = x + skip
         x = self.conv1(x, style)
-        img = self.toRGB(x, style, skip=img)
+
+        # if img is None:
+        #     fake_skip = torch.zeros((1, 3, 16, 16)).to(x.device)
+        # else:
+        #     fake_skip = img
+        img = self.toRGB(x, style, skip=img) # xxxx_1111
 
         return x, img
 
@@ -1116,12 +1077,6 @@ class FirstStage(nn.Module):
             x, mask = block(x, mask)
             if i != len(self.enc_conv) - 1:  # # xxxx_debug
                 skips.append(x)
-        # (Pdb) self.enc_conv
-        # ModuleList(
-        #   (0-2): 3 x Conv2dLayerPartial(
-        #     (conv): Conv2dLayer()
-        #   )
-        # )
 
         x_size = x.size()[-2:]
         x = feature2token(x)
@@ -1132,10 +1087,10 @@ class FirstStage(nn.Module):
                 x, x_size, mask = block(x, x_size, mask)
                 skips.append(x)
             elif i > mid:
-                x, x_size, mask = block(x, x_size, None)
+                x, x_size, mask = block(x, x_size, mask) # xxxx_1111
                 x = x + skips[mid - i]
             else:  # ==> i === mid
-                x, x_size, mask = block(x, x_size, None)
+                x, x_size, mask = block(x, x_size, None) # xxxx_1111
 
                 mul_map = torch.ones_like(x) * 0.5
                 mul_map = F.dropout(mul_map, training=True)
@@ -1156,10 +1111,10 @@ class FirstStage(nn.Module):
         # self.tran -- BasicLayer[0] -- BasicLayer[4]
 
         x = token2feature(x, x_size).contiguous()
-        img = None
+
+        img = torch.zeros(1, 3, 16, 16).to(x.device) # None # xxxx_1111
         for i, block in enumerate(self.dec_conv):  # len(self.dec_conv) === 3
             x, img = block(x, img, style, skips[len(self.dec_conv) - i - 1])
-        # self.dec_conv -- DecStyleBlock, ToRGBWithSkip
 
         # ensemble
         img = img * (1 - masks_in) + images_in * masks_in
@@ -1401,6 +1356,7 @@ class Conv2dLayer(nn.Module):
 
     def forward(self, x):
         w = self.weight * self.weight_gain
+        # todos.debug.output_var("x1", x)
         x = conv2d_resample(
             x=x,
             w=w,
@@ -1409,6 +1365,8 @@ class Conv2dLayer(nn.Module):
             down=self.down,
             padding=self.padding,
         )
+        # todos.debug.output_var("x2", x)
+
         out = bias_lrelu(x, self.bias)
         return out
 
@@ -1450,6 +1408,7 @@ class ModulatedConv2d(nn.Module):
             batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
         x = x.view(1, batch * in_channels, height, width)
+        # todos.debug.output_var("x3", x)
         x = conv2d_resample(
             x=x,
             w=weight,
@@ -1458,6 +1417,8 @@ class ModulatedConv2d(nn.Module):
             down=self.down,
             padding=self.padding,
         )
+        # todos.debug.output_var("x4", x)
+
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1502,6 +1463,7 @@ class ModulatedConv2dD(nn.Module):
             batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
         x = x.view(1, batch * in_channels, height, width)
+        # todos.debug.output_var("x5", x)
         x = conv2d_resample(
             x=x,
             w=weight,
@@ -1510,6 +1472,8 @@ class ModulatedConv2dD(nn.Module):
             down=self.down,
             padding=self.padding,
         )
+        # todos.debug.output_var("x6", x)
+
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
@@ -1571,33 +1535,7 @@ class StyleConvWithNoise(torch.nn.Module):
         x = x + noise
         return bias_lrelu(x, self.bias)
 
-
 class ToRGB(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        style_dim,
-        kernel_size=1,
-    ):
-        super().__init__()
-
-        self.conv = ModulatedConv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            style_dim=style_dim,
-        )
-        self.bias = nn.Parameter(torch.zeros([out_channels]))
-        self.register_buffer("resample_filter", setup_filter([1, 3, 3, 1]))
-        #  self.resample_filter.size() -- [4, 4]
-
-    def forward(self, x, style, skip=None):
-        x = self.conv(x, style)
-        return bias_linear(x, self.bias)
-
-
-class ToRGBWithSkip(torch.nn.Module):
     def __init__(
         self,
         in_channels,
@@ -1620,13 +1558,15 @@ class ToRGBWithSkip(torch.nn.Module):
     def forward(self, x, style, skip):
         x = self.conv(x, style)
         out = bias_linear(x, self.bias)
+        # if skip is not None:
+        #     # if skip.shape != out.shape:
+        #     #     # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
+        #     #     skip = upsample2d(skip, self.resample_filter)
+        #     #     out = out + skip
+        B, C, H, W = out.size()
+        skip = F.interpolate(skip, size=(H, W), mode="bilinear", align_corners=False)
+        out = out + skip
 
-        # pdb.set_trace()
-        if skip is not None:
-            if skip.shape != out.shape:
-                # skip.shape, out.shape -- [1, 3, 128, 128], [1, 3, 256, 256]
-                skip = upsample2d(skip, self.resample_filter)
-            out = out + skip
         return out
 
 
@@ -1685,8 +1625,6 @@ class MappingNet(torch.nn.Module):
 
 
 # ----------------------------------------------------------------------------
-
-
 def _conv2d_wrapper(
     x, w, stride=1, padding=0, groups=1, transpose=False, flip_weight=True
 ):
@@ -1720,6 +1658,8 @@ def conv2d_resample(x, w, f, up=1, down=1, padding=0):
     # up = 1, down = 2, padding = 1
     # up = 2, down = 1, padding = 1
     # up = 1, down = 1, padding = 0
+    # print(f"  conv2d_resample up={up}, down={down}")
+    # todos.debug.output_var("w", w)
 
     assert isinstance(x, torch.Tensor) and (x.ndim == 4)
     assert isinstance(w, torch.Tensor) and (w.ndim == 4) and (w.dtype == x.dtype)
@@ -1866,17 +1806,17 @@ def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1):
     return x
 
 
-def upsample2d(x, f, up=2, padding=0, gain=1):
-    r"""Upsample a batch of 2D images using the given 2D FIR filter."""
+# def upsample2d(x, f, up=2, padding=0, gain=1):
+#     r"""Upsample a batch of 2D images using the given 2D FIR filter."""
 
-    fw, fh = f.size()
-    p = [
-        padding + (fw + up - 1) // 2,
-        padding + (fw - up) // 2,
-        padding + (fh + up - 1) // 2,
-        padding + (fh - up) // 2,
-    ]
-    return upfirdn2d(x, f, up=up, padding=p, gain=gain * up * up)
+#     fw, fh = f.size()
+#     p = [
+#         padding + (fw + up - 1) // 2,
+#         padding + (fw - up) // 2,
+#         padding + (fh + up - 1) // 2,
+#         padding + (fh - up) // 2,
+#     ]
+#     return upfirdn2d(x, f, up=up, padding=p, gain=gain * up * up)
 
 
 def bias_lrelu(x, b, dim=1):
