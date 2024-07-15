@@ -75,6 +75,8 @@ class Conv2dLayerPartial(nn.Module):
         self.slide_winsize = kernel_size**2
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
         #  self.slide_winsize -- 9
+        pdb.set_trace()
+
 
     def forward(self, x, mask=None):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
@@ -634,11 +636,10 @@ class BasicLayer(nn.Module):
                     window_size=window_size,
                     shift_size=window_size // 2,
                 )
-
             self.blocks.append(b)
 
-
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
+        pdb.set_trace()
 
     def forward(self, x, x_size, mask):
         print("BasicLayer forward ...")
@@ -986,8 +987,7 @@ class FirstStage(nn.Module):
                 merge = PatchIdentity()
 
             if i < mid:
-                self.tran.append(
-                    BasicLayer(
+                b = BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
                         depth=depth,
@@ -995,10 +995,8 @@ class FirstStage(nn.Module):
                         window_size=window_sizes[i],
                         downsample=merge,
                     )
-                )
             else:
-                self.tran.append(
-                    BasicLayer(
+                b = BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
                         depth=depth,
@@ -1006,7 +1004,8 @@ class FirstStage(nn.Module):
                         window_size=window_sizes[i],
                         downsample=merge,
                     )
-                )
+            self.tran.append(b)
+
 
         # global style
         down_conv = []
@@ -1026,7 +1025,7 @@ class FirstStage(nn.Module):
         for i in range(down_time):  # down_time == 3, from 64 to input size
             res = res * 2
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
-        # pdb.set_trace()
+        pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
         print("FirstStage")
@@ -1095,7 +1094,6 @@ class SynthesisNet(nn.Module):
     ):
         super().__init__()
         resolution_log2 = int(np.log2(img_resolution))  # ==> 9
-        assert img_resolution == 2**resolution_log2 and img_resolution >= 4
 
         self.num_layers = resolution_log2 * 2 - 3 * 2  # ==> 12
 
@@ -1110,6 +1108,8 @@ class SynthesisNet(nn.Module):
         self.to_style = ToStyle(in_channels=nf(4), out_channels=nf(2) * 2)
         style_dim = w_dim + nf(2) * 2  # ==> 1536
         self.dec = Decoder(resolution_log2, style_dim, img_channels)
+
+        pdb.set_trace()
 
     def forward(self, input_image, input_mask, ws):
         out_stg1 = self.first_stage(input_image, input_mask, ws)
@@ -1155,11 +1155,10 @@ class Generator(nn.Module):
         super().__init__()
         self.z_dim = z_dim
         self.synthesis = SynthesisNet(
-            w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels
-        )
+            w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels)
         self.mapping = MappingNet(
-            z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.synthesis.num_layers
-        )
+            z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.synthesis.num_layers)
+
         self.load_weights()
 
     def forward(self, x):
@@ -1305,6 +1304,9 @@ class Conv2dLayer(nn.Module):
         bias = torch.zeros([out_channels])
         self.weight = nn.Parameter(weight)
         self.bias = nn.Parameter(bias)
+
+        pdb.set_trace()
+        
 
     def forward(self, x):
         w = self.weight * self.weight_gain
@@ -1551,6 +1553,7 @@ class MappingNet(torch.nn.Module):
 
         self.register_buffer("w_avg", torch.zeros([w_dim]))
         # self.w_avg.size() -- [512]
+        pdb.set_trace()
 
     def forward(self, z):
         # tensor [z] size: [1, 512], min: -2.510093, max: 3.06608, mean: 0.064815
