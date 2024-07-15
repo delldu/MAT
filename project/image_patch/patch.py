@@ -863,7 +863,6 @@ class DecBlockFirst(nn.Module):
 
 
 # ----------------------------------------------------------------------------
-# xxxx_debug
 class DecBlock(nn.Module):
     def __init__(
         self, res, in_channels, out_channels, style_dim, img_channels
@@ -963,22 +962,10 @@ class DecStyleBlock(nn.Module):
 
 
     def forward(self, x, img, style, skip):
-        print("DecStyleBlock ------{")
-        todos.debug.output_var("x", x)
-        todos.debug.output_var("img", img)
-        todos.debug.output_var("style", style)
-        todos.debug.output_var("skip", skip)
-        print("DecStyleBlock ------}")
-
         x = self.conv0(x, style)
         x = x + skip
         x = self.conv1(x, style)
-
-        # if img is None:
-        #     fake_skip = torch.zeros((1, 3, 16, 16)).to(x.device)
-        # else:
-        #     fake_skip = img
-        img = self.toRGB(x, style, skip=img) # xxxx_1111
+        img = self.toRGB(x, style, skip=img) 
 
         return x, img
 
@@ -1067,11 +1054,11 @@ class FirstStage(nn.Module):
             self.dec_conv.append(DecStyleBlock(res, dim, dim, style_dim, img_channels))
         # pdb.set_trace()
 
-    def forward(self, images_in, masks_in, ws):
-        x = torch.cat([masks_in - 0.5, images_in * masks_in], dim=1)
+    def forward(self, input_image, input_mask, ws):
+        x = torch.cat([input_mask - 0.5, input_image * input_mask], dim=1)
 
         skips = []
-        x, mask = self.conv_first(x, masks_in)  # input size
+        x, mask = self.conv_first(x, input_mask)  # input size
         skips.append(x)
         for i, block in enumerate(self.enc_conv):  # input size to 64
             x, mask = block(x, mask)
@@ -1087,10 +1074,10 @@ class FirstStage(nn.Module):
                 x, x_size, mask = block(x, x_size, mask)
                 skips.append(x)
             elif i > mid:
-                x, x_size, mask = block(x, x_size, mask) # xxxx_1111
+                x, x_size, mask = block(x, x_size, mask) # xxxx_debug
                 x = x + skips[mid - i]
             else:  # ==> i === mid
-                x, x_size, mask = block(x, x_size, None) # xxxx_1111
+                x, x_size, mask = block(x, x_size, None) # xxxx_debug
 
                 mul_map = torch.ones_like(x) * 0.5
                 mul_map = F.dropout(mul_map, training=True)
@@ -1112,12 +1099,12 @@ class FirstStage(nn.Module):
 
         x = token2feature(x, x_size).contiguous()
 
-        img = torch.zeros(1, 3, 16, 16).to(x.device) # None # xxxx_1111
+        img = torch.zeros(1, 3, 16, 16).to(x.device) # Change None to fake_skip for ToRGB ...
         for i, block in enumerate(self.dec_conv):  # len(self.dec_conv) === 3
             x, img = block(x, img, style, skips[len(self.dec_conv) - i - 1])
 
         # ensemble
-        img = img * (1 - masks_in) + images_in * masks_in
+        img = img * (1 - input_mask) + input_image * input_mask
 
         return img
 
@@ -1128,17 +1115,8 @@ class SynthesisNet(nn.Module):
         w_dim=512,  # Intermediate latent (W) dimensionality.
         img_resolution=512,  # Output image resolution.
         img_channels=3,  # Number of color channels.
-        # channel_base   = 32768,    # Overall multiplier for the number of channels.
-        # channel_decay  = 1.0,
-        # channel_max    = 512,      # Maximum number of channels in any layer.
     ):
         super().__init__()
-        # w_dim = 512
-        # img_resolution = 512
-        # img_channels = 3
-        # channel_base = 32768
-        # channel_decay = 1.0
-        # channel_max = 512
         resolution_log2 = int(np.log2(img_resolution))  # ==> 9
         assert img_resolution == 2**resolution_log2 and img_resolution >= 4
 
@@ -1156,17 +1134,17 @@ class SynthesisNet(nn.Module):
         style_dim = w_dim + nf(2) * 2  # ==> 1536
         self.dec = Decoder(resolution_log2, style_dim, img_channels)
 
-    def forward(self, images_in, masks_in, ws):
-        out_stg1 = self.first_stage(images_in, masks_in, ws)
+    def forward(self, input_image, input_mask, ws):
+        out_stg1 = self.first_stage(input_image, input_mask, ws)
 
         # encoder
-        x = images_in * masks_in + out_stg1 * (1 - masks_in)
-        x = torch.cat([masks_in - 0.5, x, images_in * masks_in], dim=1)
+        x = input_image * input_mask + out_stg1 * (1 - input_mask)
+        x = torch.cat([input_mask - 0.5, x, input_image * input_mask], dim=1)
         e_features = self.enc(x)
 
         fea_16 = e_features[4]
         mul_map = torch.ones_like(fea_16) * 0.5
-        mul_map = F.dropout(mul_map, training=True)
+        # mul_map = F.dropout(mul_map, training=True)
         add_n = self.to_square(ws[:, 0]).view(-1, 16, 16).unsqueeze(1)
         add_n = F.interpolate(
             add_n, size=fea_16.size()[-2:], mode="bilinear", align_corners=False
@@ -1181,7 +1159,7 @@ class SynthesisNet(nn.Module):
         img = self.dec(fea_16, ws, gs, e_features)
 
         # ensemble
-        img = img * (1 - masks_in) + images_in * masks_in
+        img = img * (1 - input_mask) + input_image * input_mask
 
         # tensor [x] size: [1, 7, 512, 512], min: -1.121117, max: 1.248556, mean: -0.007224
         # tensor [img] size: [1, 3, 512, 512], min: -1.124015, max: 1.043849, mean: 0.075933
@@ -1208,15 +1186,13 @@ class Generator(nn.Module):
         self.load_weights()
 
     def forward(self, x):
-        images_in = x[:, 0:3, :, :]
-        masks_in = x[:, 3:4, :, :]
+        input_image = x[:, 0:3, :, :]
+        input_mask = x[:, 3:4, :, :]
         z = torch.randn(1, self.z_dim).to(x.device)
+        input_image = (input_image - 0.5) * 2.0
 
-        images_in = (images_in - 0.5) * 2.0
-        # images_in, masks_in, z
-
-        # todos.debug.output_var("images_in", images_in)
-        # todos.debug.output_var("masks_in", masks_in)
+        # todos.debug.output_var("input_image", input_image)
+        # todos.debug.output_var("input_mask", input_mask)
         # todos.debug.output_var("z", z)
 
         ws = self.mapping(z)
@@ -1224,11 +1200,10 @@ class Generator(nn.Module):
         # todos.debug.output_var("ws", ws)
         # tensor [ws] size: [1, 12, 512], min: -0.035399, max: 0.030863, mean: -0.006447
 
-        img = self.synthesis(images_in, masks_in, ws)
+        output_image = self.synthesis(input_image, input_mask, ws)
+        output_image = (output_image + 1.0) / 2.0
 
-        img = (img + 1.0) / 2.0
-
-        return img.clamp(0.0, 1.0)
+        return output_image.clamp(0.0, 1.0)
 
     def load_weights(self, model_path="models/mat.pth"):
         cdir = os.path.dirname(__file__)
