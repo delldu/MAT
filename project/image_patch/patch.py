@@ -240,7 +240,7 @@ class SwinTransBlock(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size: Tuple[int, int]):
         # calculate attention mask for SW-MSA
         H, W = x_size
         img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
@@ -271,7 +271,7 @@ class SwinTransBlock(nn.Module):
 
         return attn_mask
 
-    def forward(self, x, x_size, mask=None):
+    def forward(self, x, x_size: Tuple[int, int], mask=None):
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
@@ -381,7 +381,7 @@ class SwinTransBlockWithShift(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size: Tuple[int, int]):
         # calculate attention mask for SW-MSA
         H, W = x_size
         img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
@@ -413,7 +413,7 @@ class SwinTransBlockWithShift(nn.Module):
 
         return attn_mask
 
-    def forward(self, x, x_size, mask=None):
+    def forward(self, x, x_size: Tuple[int, int], mask=None):
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
@@ -506,7 +506,7 @@ class PatchMerging(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size, mask):
+    def forward(self, x, x_size: Tuple[int, int], mask):
         x = token2feature(x, x_size)
         mask = token2feature(mask, x_size)
 
@@ -525,6 +525,7 @@ class PatchMerging(nn.Module):
         return s
 
 class PatchMergingNone(nn.Module):
+    """ mask === None """
     def __init__(self, in_channels, out_channels, down=2):
         super().__init__()
         self.in_channels = in_channels
@@ -539,7 +540,7 @@ class PatchMergingNone(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size, mask=None):
+    def forward(self, x, x_size: Tuple[int, int], mask=None):
         x = token2feature(x, x_size)
         x, mask = self.conv(x, mask)
         x_size = (x_size[0]//2, x_size[1]//2)
@@ -555,12 +556,16 @@ class PatchIdentity(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, x_size, mask):
+    def forward(self, x, x_size: Tuple[int, int], mask):
+        # tensor [x] size: [1, 4096, 180], min: -57.892014, max: 180.068939, mean: 1.617837
+        # x_size is tuple: len = 2
+        #     [item] value: '64'
+        #     [item] value: '64'
+        # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.945557
         return x, x_size, mask
 
-
-# xxxx_debug
 class PatchUpsamplingNone(nn.Module):
+    """ mask === None """
     def __init__(self, in_channels, out_channels, up=2):
         super().__init__()
         self.in_channels = in_channels
@@ -574,27 +579,11 @@ class PatchUpsamplingNone(nn.Module):
             up=up,
         )
 
-    def forward(self, x, x_size, mask=None):
+    def forward(self, x, x_size: Tuple[int, int], mask=None):
         x = token2feature(x, x_size)
-        if mask is not None:
-            pdb.set_trace()
-            mask = token2feature(mask, x_size)
-        else:
-            #pdb.set_trace()
-            pass
-
         x, mask = self.conv(x, mask)
-        # x_size = (int(x_size[0] * self.up), int(x_size[1] * self.up))
         x_size = (x_size[0] * self.up, x_size[1] * self.up)
-
         x = feature2token(x)
-        if mask is not None:
-            pdb.set_trace()
-            mask = feature2token(mask)
-        else:
-            #pdb.set_trace()
-            pass
-
         return x, x_size, mask
 
     def __repr__(self):
@@ -602,12 +591,10 @@ class PatchUpsamplingNone(nn.Module):
         return s
 
 
-# xxxx_debug
 class BasicLayer(nn.Module):
     """A basic Swin Transformer layer for one stage."""
-
     def __init__(
-        self, dim, input_resolution, depth, num_heads, window_size, downsample
+        self, dim, input_resolution, depth, num_heads, window_size, downsample, mask_none
     ):
         super().__init__()
         # dim = 180
@@ -618,8 +605,6 @@ class BasicLayer(nn.Module):
 
         self.input_resolution = input_resolution
         self.downsample = downsample
-        # Fix !!!
-        mask_none = isinstance(downsample, (PatchMergingNone, PatchUpsamplingNone))
 
         # build blocks
         self.blocks = nn.ModuleList()
@@ -643,37 +628,73 @@ class BasicLayer(nn.Module):
             self.blocks.append(b)
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
-        if mask_none: # Fix !!!
-            self.conv = Conv2dLayerPartialNone(in_channels=dim, out_channels=dim, kernel_size=3)
 
-        # pdb.set_trace()
-
-    def forward(self, x, x_size, mask):
-        # print("BasicLayer forward ...")
-        # todos.debug.output_var("x", x)
-        # todos.debug.output_var("mask", mask)
-
-        # tensor [x] size: [1, 4096, 180], min: -136.84729, max: 598.483154, mean: -0.283396
-        # x_size === (64, 64)
-        # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.663086
-
+    def forward(self, x, x_size: Tuple[int, int], mask):
         x, x_size, mask = self.downsample(x, x_size, mask)
 
         identity = x
         for blk in self.blocks:
             x, mask = blk(x, x_size, mask)
 
-        if mask is not None:
-            mask = token2feature(mask, x_size)
-            x, mask = self.conv(token2feature(x, x_size), mask)
-            x = feature2token(x) + identity
-            mask = feature2token(mask)
-        else:
-            x, mask = self.conv(token2feature(x, x_size), mask)
-            x = feature2token(x) + identity            
+        mask = token2feature(mask, x_size)
+        x, mask = self.conv(token2feature(x, x_size), mask)
+        x = feature2token(x) + identity
+        mask = feature2token(mask)
 
         return x, x_size, mask
 
+class BasicLayerNone(nn.Module):
+    """A basic Swin Transformer layer for one stage -- mask == None."""
+
+    def __init__(
+        self, dim, input_resolution, depth, num_heads, window_size, downsample, mask_none
+    ):
+        super().__init__()
+        # dim = 180
+        # input_resolution = [64, 64]
+        # depth = 2
+        # num_heads = 6
+        # window_size = 8
+
+        self.input_resolution = input_resolution
+        self.downsample = downsample
+
+        # build blocks
+        self.blocks = nn.ModuleList()
+        for i in range(depth): # depth === 2
+            if i % 2 == 0 or min(input_resolution) <= window_size:
+                b = SwinTransBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    # shift_size=0,
+                )
+            else:
+                b = SwinTransBlockWithShift(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=window_size // 2,
+                )
+            self.blocks.append(b)
+
+        self.conv = Conv2dLayerPartialNone(in_channels=dim, out_channels=dim, kernel_size=3)
+
+        # pdb.set_trace()
+
+    def forward(self, x, x_size: Tuple[int, int], mask=None):
+        x, x_size, mask = self.downsample(x, x_size, mask)
+
+        identity = x
+        for blk in self.blocks:
+            x, mask = blk(x, x_size, mask)
+
+        x, mask = self.conv(token2feature(x, x_size), mask)
+        x = feature2token(x) + identity            
+
+        return x, x_size, mask
 
 # ----------------------------------------------------------------------------
 class EncFromRGB(nn.Module):
@@ -720,7 +741,7 @@ class ConvBlockDown(nn.Module):
         return x
 
 
-def token2feature(x, x_size):
+def token2feature(x, x_size: Tuple[int, int]):
     B, N, C = x.shape
     h, w = x_size
     x = x.permute(0, 2, 1).reshape(B, C, h, w)
@@ -991,7 +1012,7 @@ class DecStyleBlock(nn.Module):
 
         return x, img
 
-
+# xxxx_1111
 class FirstStage(nn.Module):
     def __init__(
         self,
@@ -1035,16 +1056,19 @@ class FirstStage(nn.Module):
             if i == 2:
                 merge = PatchMergingNone(dim, dim, down=int(1 / ratios[i]))
 
-            if i < mid: # ==> i == 0, 1
-                b = BasicLayer(
+            # Fixed 
+            mask_is_none = isinstance(merge, (PatchMergingNone, PatchUpsamplingNone))
+            if mask_is_none:
+                b = BasicLayerNone(
                         dim=dim,
                         input_resolution=[res, res],
                         depth=depth,
                         num_heads=num_heads,
                         window_size=window_sizes[i],
                         downsample=merge,
+                        mask_none = mask_is_none,
                     )
-            else: # ==> i == 2, 3 4
+            else:
                 b = BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
@@ -1052,6 +1076,7 @@ class FirstStage(nn.Module):
                         num_heads=num_heads,
                         window_size=window_sizes[i],
                         downsample=merge,
+                        mask_none = mask_is_none,
                     )
             self.tran.append(b)
 
@@ -1100,8 +1125,8 @@ class FirstStage(nn.Module):
             elif i > mid: # ==> i = 3, 4
                 x, x_size, mask = block(x, x_size, mask) # xxxx_debug
                 x = x + skips[mid - i]
-            else:  # ==> i === 2 -- PatchMerging
-                x, x_size, mask = block(x, x_size, None)
+            else:  # ==> i === 2 -- PatchMergingNone
+                x, x_size, mask = block(x, x_size, None) ### xxxx_1111
 
                 mul_map = torch.ones_like(x) * 0.5
                 mul_map = F.dropout(mul_map, training=True)
@@ -1456,7 +1481,6 @@ class ModulatedConv2dD(nn.Module):
             batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
         x = x.view(1, batch * in_channels, height, width)
-        # todos.debug.output_var("x5", x)
         x = conv2d_resample(
             x=x,
             w=weight,
@@ -1465,7 +1489,6 @@ class ModulatedConv2dD(nn.Module):
             down=self.down, # === 1
             padding=self.padding,
         )
-        # todos.debug.output_var("x6", x)
         out = x.view(batch, self.out_channels, *x.shape[2:])
 
         return out
