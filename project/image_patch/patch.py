@@ -48,7 +48,6 @@ def window_reverse(windows, window_size: int, H: int, W: int):
     return x
 
 
-# xxxx_debug
 class Conv2dLayerPartial(nn.Module):
     def __init__(
         self,
@@ -75,49 +74,66 @@ class Conv2dLayerPartial(nn.Module):
         self.slide_winsize = kernel_size**2
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
         #  self.slide_winsize -- 9
-        # pdb.set_trace()
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
-        if mask is not None:
-            # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
-            # with torch.no_grad():
-            #     if self.weight_maskUpdater.type() != x.type():
-            #         self.weight_maskUpdater = self.weight_maskUpdater.to(x)
-            #     update_mask = F.conv2d(
-            #         mask,
-            #         self.weight_maskUpdater,
-            #         bias=None,
-            #         stride=self.down,
-            #         padding=self.padding,
-            #     )
-            #     mask_ratio = self.slide_winsize / (update_mask + 1e-8)
-            #     update_mask = torch.clamp(update_mask, 0, 1)  # 0 or 1
-            #     mask_ratio = torch.mul(mask_ratio, update_mask)
-            self.weight_maskUpdater = self.weight_maskUpdater.to(x)
-            update_mask = F.conv2d(
-                mask,
-                self.weight_maskUpdater,
-                bias=None,
-                stride=self.down,
-                padding=self.padding,
-            )
-            mask_ratio = float(self.slide_winsize) / (update_mask + 1e-8)
-            update_mask = torch.clamp(update_mask, 0.0, 1.0)  # 0 or 1
-            mask_ratio = torch.mul(mask_ratio, update_mask)
-            x = self.conv(x)
-            # x = torch.mul(x, mask_ratio)
-            x = x.mul(mask_ratio)
+        # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
 
-            return x, update_mask
-        else:
-            # ==> pdb.set_trace()
-            x = self.conv(x)
-            return x, None
+        self.weight_maskUpdater = self.weight_maskUpdater.to(x)
+        update_mask = F.conv2d(
+            mask,
+            self.weight_maskUpdater,
+            bias=None,
+            stride=self.down,
+            padding=self.padding,
+        )
+        mask_ratio = float(self.slide_winsize) / (update_mask + 1e-8)
+        update_mask = torch.clamp(update_mask, 0.0, 1.0)  # 0 or 1
+        mask_ratio = torch.mul(mask_ratio, update_mask)
+        x = self.conv(x)
+        # x = torch.mul(x, mask_ratio)
+        x = x.mul(mask_ratio)
+
+        return x, update_mask
 
     def __repr__(self):
         s = f"Conv2dLayerPartial(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},up={self.up}, down={self.down})"
         return s
+
+class Conv2dLayerPartialNone(nn.Module):
+    def __init__(
+        self,
+        in_channels,  # Number of input channels.
+        out_channels,  # Number of output channels.
+        kernel_size,  # Width and height of the convolution kernel.
+        up=1,  # Integer upsampling factor.
+        down=1,  # Integer downsampling factor.
+    ):
+        super().__init__()
+        # in_channels = 4
+        # out_channels = 180
+        # kernel_size = 3
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.up = up
+        self.down = down
+
+        self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, up, down)
+
+        # self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
+        # self.slide_winsize = kernel_size**2
+        # self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
+
+    def forward(self, x, mask=None):
+        # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
+        x = self.conv(x)
+        return x, None
+
+    def __repr__(self):
+        s = f"Conv2dLayerPartialNone(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},up={self.up}, down={self.down})"
+        return s
+
 
 # xxxx_debug
 class WindowAttention(nn.Module):
@@ -475,7 +491,6 @@ class SwinTransBlockWithShift(nn.Module):
         s = f"SwinTransBlockWithShift(dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, window_size={self.window_size}, shift_size={self.shift_size})"
         return s
 
-# xxxx_debug
 class PatchMerging(nn.Module):
     def __init__(self, in_channels, out_channels, down=2):
         super().__init__()
@@ -491,18 +506,9 @@ class PatchMerging(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size, mask=None):
-        # print("PatchMerging forward ...")
-        # todos.debug.output_var("x", x)
-        # todos.debug.output_var("mask", mask)
-
+    def forward(self, x, x_size, mask):
         x = token2feature(x, x_size)
-        if mask is not None:
-            # ==> pdb.set_trace()
-            mask = token2feature(mask, x_size)
-        else:
-            # ==> pdb.set_trace()
-            pass
+        mask = token2feature(mask, x_size)
 
         x, mask = self.conv(x, mask)
         # ratio = 1 / self.down  # self.down === 2
@@ -510,16 +516,38 @@ class PatchMerging(nn.Module):
         x_size = (x_size[0]//2, x_size[1]//2)
 
         x = feature2token(x)
-        if mask is not None:
-            mask = feature2token(mask)
-        else:
-            pass
-            # pdb.set_trace()
+        mask = feature2token(mask)
 
         return x, x_size, mask
 
     def __repr__(self):
         s = f"PatchMerging(in_channels={self.in_channels}, out_channels={self.out_channels}, down={self.down})"
+        return s
+
+class PatchMergingNone(nn.Module):
+    def __init__(self, in_channels, out_channels, down=2):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.down = down
+        # self.down === 2
+
+        self.conv = Conv2dLayerPartialNone(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            down=down,
+        )
+
+    def forward(self, x, x_size, mask=None):
+        x = token2feature(x, x_size)
+        x, mask = self.conv(x, mask)
+        x_size = (x_size[0]//2, x_size[1]//2)
+        x = feature2token(x)
+        return x, x_size, mask
+
+    def __repr__(self):
+        s = f"PatchMergingNone(in_channels={self.in_channels}, out_channels={self.out_channels}, down={self.down})"
         return s
 
 
@@ -532,14 +560,14 @@ class PatchIdentity(nn.Module):
 
 
 # xxxx_debug
-class PatchUpsampling(nn.Module):
+class PatchUpsamplingNone(nn.Module):
     def __init__(self, in_channels, out_channels, up=2):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.up = up  # up === 2
 
-        self.conv = Conv2dLayerPartial(
+        self.conv = Conv2dLayerPartialNone(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
@@ -547,15 +575,12 @@ class PatchUpsampling(nn.Module):
         )
 
     def forward(self, x, x_size, mask=None):
-        # print("PatchUpsampling forward ...")
-        # todos.debug.output_var("x", x)
-        # todos.debug.output_var("mask", mask)
-
         x = token2feature(x, x_size)
         if mask is not None:
+            pdb.set_trace()
             mask = token2feature(mask, x_size)
         else:
-            # ==> pdb.set_trace()
+            #pdb.set_trace()
             pass
 
         x, mask = self.conv(x, mask)
@@ -564,15 +589,16 @@ class PatchUpsampling(nn.Module):
 
         x = feature2token(x)
         if mask is not None:
+            pdb.set_trace()
             mask = feature2token(mask)
         else:
-            # ==> pdb.set_trace()
+            #pdb.set_trace()
             pass
 
         return x, x_size, mask
 
     def __repr__(self):
-        s = f"PatchUpsampling(in_channels={self.in_channels}, out_channels={self.out_channels}, up={self.up})"
+        s = f"PatchUpsamplingNone(in_channels={self.in_channels}, out_channels={self.out_channels}, up={self.up})"
         return s
 
 
@@ -592,6 +618,8 @@ class BasicLayer(nn.Module):
 
         self.input_resolution = input_resolution
         self.downsample = downsample
+        # Fix !!!
+        mask_none = isinstance(downsample, (PatchMergingNone, PatchUpsamplingNone))
 
         # build blocks
         self.blocks = nn.ModuleList()
@@ -615,6 +643,9 @@ class BasicLayer(nn.Module):
             self.blocks.append(b)
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
+        if mask_none: # Fix !!!
+            self.conv = Conv2dLayerPartialNone(in_channels=dim, out_channels=dim, kernel_size=3)
+
         # pdb.set_trace()
 
     def forward(self, x, x_size, mask):
@@ -993,14 +1024,18 @@ class FirstStage(nn.Module):
 
         for i, depth in enumerate(depths):
             res = int(res * ratios[i])
-            if ratios[i] < 1:
+            if ratios[i] < 1: # i == 1, 2
                 merge = PatchMerging(dim, dim, down=int(1 / ratios[i]))
-            elif ratios[i] > 1:
-                merge = PatchUpsampling(dim, dim, up=ratios[i])
-            else: # ==> ratios[i] === 1
+            elif ratios[i] > 1: # i == 3, 4
+                merge = PatchUpsamplingNone(dim, dim, up=ratios[i])
+            else: # ==> i === 0
                 merge = PatchIdentity()
+ 
+            # Fix !!!
+            if i == 2:
+                merge = PatchMergingNone(dim, dim, down=int(1 / ratios[i]))
 
-            if i < mid:
+            if i < mid: # ==> i == 0, 1
                 b = BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
@@ -1009,7 +1044,7 @@ class FirstStage(nn.Module):
                         window_size=window_sizes[i],
                         downsample=merge,
                     )
-            else:
+            else: # ==> i == 2, 3 4
                 b = BasicLayer(
                         dim=dim,
                         input_resolution=[res, res],
@@ -1059,14 +1094,14 @@ class FirstStage(nn.Module):
         mask = feature2token(mask)
         mid = len(self.tran) // 2  # len(self.tran) == 5 ==> mid === 2
         for i, block in enumerate(self.tran):  # 64 to 16
-            if i < mid:  # # xxxx_debug
+            if i < mid:  # ==> i = 0, 1 # xxxx_debug
                 x, x_size, mask = block(x, x_size, mask)
                 skips.append(x)
-            elif i > mid:
+            elif i > mid: # ==> i = 3, 4
                 x, x_size, mask = block(x, x_size, mask) # xxxx_debug
                 x = x + skips[mid - i]
-            else:  # ==> i === mid
-                x, x_size, mask = block(x, x_size, None) # xxxx_debug
+            else:  # ==> i === 2 -- PatchMerging
+                x, x_size, mask = block(x, x_size, None)
 
                 mul_map = torch.ones_like(x) * 0.5
                 mul_map = F.dropout(mul_map, training=True)
@@ -1262,7 +1297,7 @@ class LinearFC(nn.Module):
         w = self.weight * self.weight_gain
         b = self.bias
         x = x.matmul(w.t())
-        print("LinearFC reshape: ", [-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
+        # print("LinearFC reshape: ", [-1 if i == x.ndim-1 else 1 for i in range(x.ndim)])
         out = x + b.reshape([-1 if i == x.ndim - 1 else 1 for i in range(x.ndim)])
         return out
 
@@ -1699,7 +1734,7 @@ def bias_lrelu(x, b, dim=1):
     # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
     # Add bias.
 
-    print("bias_lrelu", "dim=", dim, [-1 if i == dim else 1 for i in range(x.ndim)])
+    # print("bias_lrelu", "dim=", dim, [-1 if i == dim else 1 for i in range(x.ndim)])
 
     x = x + b.reshape([-1 if i == dim else 1 for i in range(x.ndim)])
     # [1, -1], [1, -1, 1, 1], [1, 1, -1],
