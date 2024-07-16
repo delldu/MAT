@@ -89,7 +89,8 @@ class Conv2dLayerPartial(nn.Module):
         )
         mask_ratio = float(self.slide_winsize) / (update_mask + 1e-8)
         update_mask = torch.clamp(update_mask, 0.0, 1.0)  # 0 or 1
-        mask_ratio = torch.mul(mask_ratio, update_mask)
+        # mask_ratio = torch.mul(mask_ratio, update_mask)
+        mask_ratio = mask_ratio.mul(update_mask)
         x = self.conv(x)
         # x = torch.mul(x, mask_ratio)
         x = x.mul(mask_ratio)
@@ -118,24 +119,18 @@ class Conv2dLayerPartialNone(nn.Module):
         self.kernel_size = kernel_size
         self.up = up
         self.down = down
-
         self.conv = Conv2dLayer(in_channels, out_channels, kernel_size, up, down)
 
-        # self.weight_maskUpdater = torch.ones(1, 1, kernel_size, kernel_size)
-        # self.slide_winsize = kernel_size**2
-        # self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
-
-    def forward(self, x, mask=None):
+    def forward(self, x):
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
         x = self.conv(x)
-        return x, None
+        return x
 
     def __repr__(self):
         s = f"Conv2dLayerPartialNone(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},up={self.up}, down={self.down})"
         return s
 
 
-# xxxx_debug
 class WindowAttention(nn.Module):
     r"""Window based multi-head self attention (W-MSA) module with relative position bias."""
 
@@ -153,7 +148,11 @@ class WindowAttention(nn.Module):
         self.proj = LinearFC(in_features=dim, out_features=dim)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask_windows=None, mask=None):
+    def forward(self, x, mask, mask_windows):
+        # todos.debug.output_var("mask", mask)
+        # todos.debug.output_var("mask_windows", mask_windows)
+        # print("-" * 80)
+
         B_, N, C = x.shape
         norm_x = F.normalize(x, p=2.0, dim=-1)
         q = (
@@ -174,26 +173,18 @@ class WindowAttention(nn.Module):
 
         attn = (q @ k) * self.scale
 
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-        else:
-            pdb.set_trace()
+        nW = mask.shape[0]
+        attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, N, N)
 
-        if mask_windows is not None:
-            # ==> pdb.set_trace()
-            attn_mask_windows = mask_windows.squeeze(-1).unsqueeze(1).unsqueeze(1)
-            attn = attn + attn_mask_windows.masked_fill(
-                attn_mask_windows == 0, float(-100.0)
-            ).masked_fill(attn_mask_windows == 1, float(0.0))
-            with torch.no_grad():
-                mask_windows = torch.clamp(
-                    torch.sum(mask_windows, dim=1, keepdim=True), 0, 1
-                ).repeat(1, N, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
+        # ==> pdb.set_trace()
+        attn_mask_windows = mask_windows.squeeze(-1).unsqueeze(1).unsqueeze(1)
+        attn = attn + attn_mask_windows.masked_fill(
+            attn_mask_windows == 0, float(-100.0)
+        ).masked_fill(attn_mask_windows == 1, float(0.0))
+        mask_windows = torch.clamp(
+            torch.sum(mask_windows, dim=1, keepdim=True), 0, 1
+        ).repeat(1, N, 1)
 
         attn = self.softmax(attn)
 
@@ -203,6 +194,58 @@ class WindowAttention(nn.Module):
 
     def __repr__(self):
         s = f"WindowAttention(dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads})"
+        return s
+
+class WindowAttentionNone(nn.Module):
+    """ mask_windows === None """
+    r"""Window based multi-head self attention (W-MSA) module with relative position bias."""
+
+    def __init__(self, dim, window_size, num_heads):
+        super().__init__()
+        self.dim = dim
+        self.window_size = window_size  # Wh, Ww
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim**-0.5
+
+        self.q = LinearFC(in_features=dim, out_features=dim)
+        self.k = LinearFC(in_features=dim, out_features=dim)
+        self.v = LinearFC(in_features=dim, out_features=dim)
+        self.proj = LinearFC(in_features=dim, out_features=dim)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x, mask=None, mask_windows=None):
+        B_, N, C = x.shape
+        norm_x = F.normalize(x, p=2.0, dim=-1)
+        q = (
+            self.q(norm_x)
+            .reshape(B_, N, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 1, 3)
+        )
+        k = (
+            self.k(norm_x)
+            .view(B_, -1, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 3, 1)
+        )
+        v = (
+            self.v(x)
+            .view(B_, -1, self.num_heads, C // self.num_heads)
+            .permute(0, 2, 1, 3)
+        )
+
+        attn = (q @ k) * self.scale
+
+        nW = mask.shape[0]
+        attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, N, N)
+        attn = self.softmax(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        x = self.proj(x)
+        return x, mask_windows
+
+    def __repr__(self):
+        s = f"WindowAttentionNone(dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads})"
         return s
 
 
@@ -278,19 +321,11 @@ class SwinTransBlock(nn.Module):
 
         shortcut = x
         x = x.view(B, H, W, C)
-        if mask is not None:
-            mask = mask.view(B, H, W, 1)
-        else:
-            pdb.set_trace()
-            pass
+        mask = mask.view(B, H, W, 1)
 
         # no cyclic shift
         shifted_x = x
-        if mask is not None:
-            shifted_mask = mask
-        else:
-            pdb.set_trace()
-            pass
+        shifted_mask = mask
 
         # partition windows
         x_windows = window_partition(
@@ -299,43 +334,26 @@ class SwinTransBlock(nn.Module):
         x_windows = x_windows.view(
             -1, self.window_size * self.window_size, C
         )  # nW*B, window_size*window_size, C
-        if mask is not None:
-            # ==> pdb.set_trace()
-            mask_windows = window_partition(shifted_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
-        else:
-            mask_windows = None
-            pdb.set_trace()
+        mask_windows = window_partition(shifted_mask, self.window_size)
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask_windows, mask=self.calculate_mask(x_size).to(x.device)
+            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
         )  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-        if mask is not None:
-            mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
-            shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
-        else:
-            pdb.set_trace()
-            pass
+        mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
+        shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
 
         # no cyclic shift
         x = shifted_x
-        if mask is not None:
-            mask = shifted_mask
-        else:
-            pdb.set_trace()
-            pass
+        mask = shifted_mask
 
         x = x.view(B, H * W, C)
-        if mask is not None:
-            mask = mask.view(B, H * W, 1)
-        else:
-            pdb.set_trace()
-            pass
+        mask = mask.view(B, H * W, 1)
 
         # FFN
         x = self.fuse(torch.cat([shortcut, x], dim=-1))
@@ -371,7 +389,7 @@ class SwinTransBlockNone(nn.Module):
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
 
-        self.attn = WindowAttention(
+        self.attn = WindowAttentionNone(
             dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
         )
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
@@ -422,21 +440,9 @@ class SwinTransBlockNone(nn.Module):
 
         shortcut = x
         x = x.view(B, H, W, C)
-        if mask is not None:
-            pdb.set_trace()
-            mask = mask.view(B, H, W, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         # no cyclic shift
         shifted_x = x
-        if mask is not None:
-            pdb.set_trace()
-            shifted_mask = mask
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         # partition windows
         x_windows = window_partition(
@@ -445,46 +451,21 @@ class SwinTransBlockNone(nn.Module):
         x_windows = x_windows.view(
             -1, self.window_size * self.window_size, C
         )  # nW*B, window_size*window_size, C
-        if mask is not None:
-            pdb.set_trace()
-            mask_windows = window_partition(shifted_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
-        else:
-            mask_windows = None
-            # ==> pdb.set_trace()
+        mask_windows = None
+        # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask_windows, mask=self.calculate_mask(x_size).to(x.device)
+            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
         )  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-        if mask is not None:
-            pdb.set_trace()
-            mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
-            shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
-        else:
-            # pdb.set_trace()
-            pass
 
         # no cyclic shift
         x = shifted_x
-        if mask is not None:
-            pdb.set_trace()
-            mask = shifted_mask
-        else:
-            # ==> pdb.set_trace()
-            pass
-
         x = x.view(B, H * W, C)
-        if mask is not None:
-            pdb.set_trace()
-            mask = mask.view(B, H * W, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         # FFN
         x = self.fuse(torch.cat([shortcut, x], dim=-1))
@@ -568,62 +549,41 @@ class SwinTransBlockWithShift(nn.Module):
 
         shortcut = x
         x = x.view(B, H, W, C)
-        if mask is not None:
-            mask = mask.view(B, H, W, 1)
-        else:
-            pdb.set_trace()
+        mask = mask.view(B, H, W, 1)
 
         # cyclic shift
         shifted_x = torch.roll(
             x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
         )
-        if mask is not None:
-            shifted_mask = torch.roll(
-                mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
-        else:
-            pdb.set_trace()
+        shifted_mask = torch.roll(
+            mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+        )
 
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-        if mask is not None:
-            mask_windows = window_partition(shifted_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
-        else:
-            mask_windows = None
-            pdb.set_trace()
+        mask_windows = window_partition(shifted_mask, self.window_size)
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask_windows, mask=self.calculate_mask(x_size).to(x.device)
+            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
         )  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-        if mask is not None:
-            mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
-            shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
-        else:
-            pdb.set_trace()
+        mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
+        shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
 
         # reverse cyclic shift
         x = torch.roll(
             shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
         )
-        if mask is not None:
-            mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-        else:
-            pdb.set_trace()
-            pass
+        mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
 
         x = x.view(B, H * W, C)
-        if mask is not None:
-            mask = mask.view(B, H * W, 1)
-        else:
-            pdb.set_trace()
-            pass
+        mask = mask.view(B, H * W, 1)
 
         # FFN
         x = self.fuse(torch.cat([shortcut, x], dim=-1))
@@ -656,7 +616,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
 
-        self.attn = WindowAttention(
+        self.attn = WindowAttentionNone(
             dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
         )
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
@@ -708,71 +668,33 @@ class SwinTransBlockWithShiftNone(nn.Module):
 
         shortcut = x
         x = x.view(B, H, W, C)
-        if mask is not None:
-            pdb.set_trace()
-            mask = mask.view(B, H, W, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         # cyclic shift
         shifted_x = torch.roll(
             x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
         )
-        if mask is not None:
-            pdb.set_trace()
-            shifted_mask = torch.roll(
-                mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
-        else:
-            # =>pdb.set_trace()
-            pass
 
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-        if mask is not None:
-            pdb.set_trace()
-            mask_windows = window_partition(shifted_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
-        else:
-            mask_windows = None
-            # ==> pdb.set_trace()
+        mask_windows = None
+        # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask_windows, mask=self.calculate_mask(x_size).to(x.device)
+            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
         )  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-        if mask is not None:
-            pdb.set_trace()
-            mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
-            shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
-        else:
-            # pdb.set_trace()
-            pass
 
         # reverse cyclic shift
         x = torch.roll(
             shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
         )
-        if mask is not None:
-            pdb.set_trace()
-            mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         x = x.view(B, H * W, C)
-        if mask is not None:
-            pdb.set_trace()
-            mask = mask.view(B, H * W, 1)
-        else:
-            # ==> pdb.set_trace()
-            pass
 
         # FFN
         x = self.fuse(torch.cat([shortcut, x], dim=-1))
@@ -836,7 +758,7 @@ class PatchMergingNone(nn.Module):
 
     def forward(self, x, x_size: Tuple[int, int], mask=None):
         x = token2feature(x, x_size)
-        x, mask = self.conv(x, mask)
+        x = self.conv(x)
         x_size = (x_size[0]//2, x_size[1]//2)
         x = feature2token(x)
         return x, x_size, mask
@@ -875,7 +797,7 @@ class PatchUpsamplingNone(nn.Module):
 
     def forward(self, x, x_size: Tuple[int, int], mask=None):
         x = token2feature(x, x_size)
-        x, mask = self.conv(x, mask)
+        x = self.conv(x)
         x_size = (x_size[0] * self.up, x_size[1] * self.up)
         x = feature2token(x)
         return x, x_size, mask
@@ -985,7 +907,7 @@ class BasicLayerNone(nn.Module):
         for blk in self.blocks:
             x, mask = blk(x, x_size, mask)
 
-        x, mask = self.conv(token2feature(x, x_size), mask)
+        x = self.conv(token2feature(x, x_size))
         x = feature2token(x) + identity            
 
         return x, x_size, mask
@@ -1400,47 +1322,66 @@ class FirstStage(nn.Module):
 
         x = torch.cat([input_mask - 0.5, input_image * input_mask], dim=1)
 
-        skips = []
         x, mask = self.conv_first(x, input_mask)  # input size
-        skips.append(x)
+
+        skips = []
         for i, block in enumerate(self.enc_conv):  # input size to 64
+            # block -- Conv2dLayerPartial
+            skips.append(x)
             x, mask = block(x, mask)
-            if i != len(self.enc_conv) - 1:  # # xxxx_debug
-                skips.append(x)
+
+        # skips.append(x)
+        # x, mask = self.enc_conv[0](x, mask)
+        # skips.append(x)
+        # x, mask = self.enc_conv[1](x, mask)
+        # skips.append(x)
+        # x, mask = self.enc_conv[2](x, mask)
 
         x_size = x.size()[-2:]
         x = feature2token(x)
         mask = feature2token(mask)
         mid = len(self.tran) // 2  # len(self.tran) == 5 ==> mid === 2
+
+        # pdb.set_trace()
         for i, block in enumerate(self.tran):  # 64 to 16
             if i < mid:  # ==> i = 0, 1 # xxxx_debug
                 x, x_size, mask = block(x, x_size, mask)
                 skips.append(x)
             elif i > mid: # ==> i = 3, 4
-                x, x_size, mask = block(x, x_size, mask) # xxxx_debug
+                x, x_size, mask = block(x, x_size, mask) # PatchUpsamplingNone
                 x = x + skips[mid - i]
             else:  # ==> i === 2 -- PatchMergingNone
+                # tensor [x] size: [1, 1024, 180], min: -119.121346, max: 524.88324, mean: 1.946196
+                # x_size is tuple: len = 2
+                #     [item] value: '32'
+                #     [item] value: '32'
                 x, x_size, mask = block(x, x_size, None) ### xxxx_1111
-
-                mul_map = torch.ones_like(x) * 0.5
-                mul_map = F.dropout(mul_map, training=True)
                 ws = self.ws_style(ws[:, -1])
                 add_n = self.to_square(ws).unsqueeze(1)
+                todos.debug.output_var("add_n", add_n)
                 add_n = (
-                    F.interpolate(
-                        add_n, size=x.size(1), mode="linear", align_corners=False
-                    )
+                    F.interpolate(add_n, size=x.size(1), mode="linear", align_corners=False)
                     .squeeze(1)
                     .unsqueeze(-1)
                 )
-                x = x * mul_map + add_n * (1 - mul_map)
+                #add_n.size() ==> [1, 1, 256] to [1, 256, 1]
+                x = x * 0.5 + add_n * 0.5 # x.size() -- [1, 256, 180]
+
                 gs = self.to_style(
                     self.down_conv(token2feature(x, x_size)).flatten(start_dim=1)
                 )
+                # tensor [x] size: [1, 256, 180], min: -37.52676, max: 118.322845, mean: -1.182316
+                # x_size is tuple: len = 2
+                #     [item] value: '16'
+                #     [item] value: '16'
+                # tensor [gs] size: [1, 360], min: -0.740436, max: 1.390865, mean: -0.038239
+                # tensor [ws] size: [1, 180], min: -0.641485, max: 1.997928, mean: 0.000635
+
                 style = torch.cat([gs, ws], dim=1)
         # self.tran -- BasicLayer[0] -- BasicLayer[4]
 
         x = token2feature(x, x_size).contiguous()
+
 
         img = torch.zeros(1, 3, 16, 16).to(x.device) # Change None to fake_skip for ToRGB ...
         for i, block in enumerate(self.dec_conv):  # len(self.dec_conv) === 3
@@ -1481,19 +1422,19 @@ class SynthesisNet(nn.Module):
     def forward(self, input_image, input_mask, ws):
         out_stg1 = self.first_stage(input_image, input_mask, ws)
 
+        # return out_stg1 # xxxx_1111
+
         # encoder
         x = input_image * input_mask + out_stg1 * (1 - input_mask)
         x = torch.cat([input_mask - 0.5, x, input_image * input_mask], dim=1)
         e_features = self.enc(x)
 
         fea_16 = e_features[4]
-        mul_map = torch.ones_like(fea_16) * 0.5
-        # mul_map = F.dropout(mul_map, training=True)
         add_n = self.to_square(ws[:, 0]).view(-1, 16, 16).unsqueeze(1)
         add_n = F.interpolate(
             add_n, size=fea_16.size()[-2:], mode="bilinear", align_corners=False
         )
-        fea_16 = fea_16 * mul_map + add_n * (1 - mul_map)
+        fea_16 = fea_16 * 0.5 + add_n * 0.5
         e_features[4] = fea_16
 
         # style
