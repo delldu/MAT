@@ -7,13 +7,13 @@ import numpy as np
 from timm.models.layers import to_2tuple
 
 # ----------------------------------------------------------------------------
-from typing import Tuple
+from typing import Tuple, List
 import todos
 
 import pdb
 
-
-def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
+# def nf(stage, channel_base=32768, channel_decay=1.0, channel_max=512):
+def nf(stage: int):
     NF = {512: 64, 256: 128, 128: 256, 64: 512, 32: 512, 16: 512, 8: 512, 4: 512}
     return NF[2**stage]
 
@@ -47,6 +47,35 @@ def window_reverse(windows, window_size: int, H: int, W: int):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
+def window_calculate_mask(x_size: Tuple[int, int], shift_size:int, window_size:int):
+    # calculate attention mask for SW-MSA
+    H, W = x_size
+    img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+    h_slices = (
+        slice(0, -window_size),
+        slice(-window_size, -shift_size),
+        slice(-shift_size, None),
+    )
+    w_slices = (
+        slice(0, -window_size),
+        slice(-window_size, -shift_size),
+        slice(-shift_size, None),
+    )
+    cnt = 0
+    for h in h_slices:
+        for w in w_slices:
+            img_mask[:, h, w, :] = cnt
+            cnt += 1
+
+    mask_windows = window_partition(
+        img_mask, window_size
+    )  # nW, window_size, window_size, 1
+    mask_windows = mask_windows.view(-1, window_size * window_size)
+    attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+    attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
+
+    return attn_mask
+
 
 class Conv2dLayerPartial(nn.Module):
     def __init__(
@@ -75,7 +104,7 @@ class Conv2dLayerPartial(nn.Module):
         self.padding = kernel_size // 2 if kernel_size % 2 == 1 else 0
         #  self.slide_winsize -- 9
 
-    def forward(self, x, mask):
+    def forward(self, x, mask)->List[torch.Tensor]:
         # tensor [x] size: [1, 4, 512, 512], min: -1.0, max: 1.0, mean: -0.063706
         # tensor [mask] size: [1, 1, 512, 512], min: 0.0, max: 1.0, mean: 0.247547
 
@@ -148,11 +177,7 @@ class WindowAttention(nn.Module):
         self.proj = LinearFC(in_features=dim, out_features=dim)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask, mask_windows):
-        # todos.debug.output_var("mask", mask)
-        # todos.debug.output_var("mask_windows", mask_windows)
-        # print("-" * 80)
-
+    def forward(self, x, mask, mask_windows) -> List[torch.Tensor]:
         B_, N, C = x.shape
         norm_x = F.normalize(x, p=2.0, dim=-1)
         q = (
@@ -198,8 +223,6 @@ class WindowAttention(nn.Module):
 
 class WindowAttentionNone(nn.Module):
     """ mask_windows === None """
-    r"""Window based multi-head self attention (W-MSA) module with relative position bias."""
-
     def __init__(self, dim, window_size, num_heads):
         super().__init__()
         self.dim = dim
@@ -214,7 +237,7 @@ class WindowAttentionNone(nn.Module):
         self.proj = LinearFC(in_features=dim, out_features=dim)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask=None, mask_windows=None):
+    def forward(self, x, mask):
         B_, N, C = x.shape
         norm_x = F.normalize(x, p=2.0, dim=-1)
         q = (
@@ -242,7 +265,7 @@ class WindowAttentionNone(nn.Module):
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
         x = self.proj(x)
-        return x, mask_windows
+        return x
 
     def __repr__(self):
         s = f"WindowAttentionNone(dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads})"
@@ -270,9 +293,7 @@ class SwinTransBlock(nn.Module):
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
 
-        self.attn = WindowAttention(
-            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
-        )
+        self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads)
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
@@ -284,35 +305,7 @@ class SwinTransBlock(nn.Module):
         # shift_size = 8, window_size=16
 
     def calculate_mask(self, x_size: Tuple[int, int]):
-        # calculate attention mask for SW-MSA
-        H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
-
-        return attn_mask
+        return window_calculate_mask(x_size, self.shift_size, self.window_size)
 
     def forward(self, x, x_size: Tuple[int, int], mask):
         # H, W = self.input_resolution
@@ -340,7 +333,7 @@ class SwinTransBlock(nn.Module):
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
             x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
-        )  # nW*B, window_size*window_size, C
+        )
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -403,35 +396,7 @@ class SwinTransBlockNone(nn.Module):
         # shift_size = 8, window_size=16
 
     def calculate_mask(self, x_size: Tuple[int, int]):
-        # calculate attention mask for SW-MSA
-        H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
-
-        return attn_mask
+        return window_calculate_mask(x_size, self.shift_size, self.window_size)
 
     def forward(self, x, x_size: Tuple[int, int], mask=None):
         # H, W = self.input_resolution
@@ -455,9 +420,7 @@ class SwinTransBlockNone(nn.Module):
         # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        attn_windows, mask_windows = self.attn(
-            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
-        )  # nW*B, window_size*window_size, C
+        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -497,9 +460,7 @@ class SwinTransBlockWithShift(nn.Module):
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
 
-        self.attn = WindowAttention(
-            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
-        )
+        self.attn = WindowAttention(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads)
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
@@ -511,36 +472,7 @@ class SwinTransBlockWithShift(nn.Module):
         # shift_size = 8, window_size=16
 
     def calculate_mask(self, x_size: Tuple[int, int]):
-        # calculate attention mask for SW-MSA
-        H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
-        # slice(start, stop, step)
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
-
-        return attn_mask
+        return window_calculate_mask(x_size, self.shift_size, self.window_size)
 
     def forward(self, x, x_size: Tuple[int, int], mask):
         # H, W = self.input_resolution
@@ -568,7 +500,7 @@ class SwinTransBlockWithShift(nn.Module):
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
             x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
-        )  # nW*B, window_size*window_size, C
+        )
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -616,9 +548,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
 
-        self.attn = WindowAttentionNone(
-            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads
-        )
+        self.attn = WindowAttentionNone(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads)
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
@@ -630,36 +560,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
         # shift_size = 8, window_size=16
 
     def calculate_mask(self, x_size: Tuple[int, int]):
-        # calculate attention mask for SW-MSA
-        H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
-        # slice(start, stop, step)
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
-
-        return attn_mask
+        return window_calculate_mask(x_size, self.shift_size, self.window_size)
 
     def forward(self, x, x_size: Tuple[int, int], mask=None):
         # H, W = self.input_resolution
@@ -681,9 +582,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
         # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        attn_windows, mask_windows = self.attn(
-            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
-        )  # nW*B, window_size*window_size, C
+        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -1329,7 +1228,6 @@ class FirstStage(nn.Module):
             # block -- Conv2dLayerPartial
             skips.append(x)
             x, mask = block(x, mask)
-
         # skips.append(x)
         # x, mask = self.enc_conv[0](x, mask)
         # skips.append(x)
@@ -1342,7 +1240,6 @@ class FirstStage(nn.Module):
         mask = feature2token(mask)
         mid = len(self.tran) // 2  # len(self.tran) == 5 ==> mid === 2
 
-        # pdb.set_trace()
         for i, block in enumerate(self.tran):  # 64 to 16
             if i < mid:  # ==> i = 0, 1 # xxxx_debug
                 x, x_size, mask = block(x, x_size, mask)
@@ -1352,36 +1249,20 @@ class FirstStage(nn.Module):
                 x = x + skips[mid - i]
             else:  # ==> i === 2 -- PatchMergingNone
                 # tensor [x] size: [1, 1024, 180], min: -119.121346, max: 524.88324, mean: 1.946196
-                # x_size is tuple: len = 2
-                #     [item] value: '32'
-                #     [item] value: '32'
-                x, x_size, mask = block(x, x_size, None) ### xxxx_1111
+                # x_size --- [32, 32]
+                x, x_size, mask = block(x, x_size, None) ### PatchMergingNone
                 ws = self.ws_style(ws[:, -1])
-                add_n = self.to_square(ws).unsqueeze(1)
-                todos.debug.output_var("add_n", add_n)
-                add_n = (
-                    F.interpolate(add_n, size=x.size(1), mode="linear", align_corners=False)
-                    .squeeze(1)
-                    .unsqueeze(-1)
-                )
-                #add_n.size() ==> [1, 1, 256] to [1, 256, 1]
+                add_n = self.to_square(ws).view(1, 256, 1)
                 x = x * 0.5 + add_n * 0.5 # x.size() -- [1, 256, 180]
 
-                gs = self.to_style(
-                    self.down_conv(token2feature(x, x_size)).flatten(start_dim=1)
-                )
+                gs = self.to_style(self.down_conv(token2feature(x, x_size)).flatten(start_dim=1))
                 # tensor [x] size: [1, 256, 180], min: -37.52676, max: 118.322845, mean: -1.182316
-                # x_size is tuple: len = 2
-                #     [item] value: '16'
-                #     [item] value: '16'
+                # x_size --- [16, 16]
                 # tensor [gs] size: [1, 360], min: -0.740436, max: 1.390865, mean: -0.038239
                 # tensor [ws] size: [1, 180], min: -0.641485, max: 1.997928, mean: 0.000635
-
                 style = torch.cat([gs, ws], dim=1)
-        # self.tran -- BasicLayer[0] -- BasicLayer[4]
 
         x = token2feature(x, x_size).contiguous()
-
 
         img = torch.zeros(1, 3, 16, 16).to(x.device) # Change None to fake_skip for ToRGB ...
         for i, block in enumerate(self.dec_conv):  # len(self.dec_conv) === 3
@@ -1429,11 +1310,13 @@ class SynthesisNet(nn.Module):
         x = torch.cat([input_mask - 0.5, x, input_image * input_mask], dim=1)
         e_features = self.enc(x)
 
-        fea_16 = e_features[4]
-        add_n = self.to_square(ws[:, 0]).view(-1, 16, 16).unsqueeze(1)
-        add_n = F.interpolate(
-            add_n, size=fea_16.size()[-2:], mode="bilinear", align_corners=False
-        )
+        fea_16 = e_features[4] # size() -- [1, 512, 16, 16]
+
+        # self.to_square(ws[:, 0]).size() -- [1, 256]
+        add_n = self.to_square(ws[:, 0]).view(1, 1, 16, 16)
+        # add_n = F.interpolate(
+        #     add_n, size=(16, 16), mode="bilinear", align_corners=False
+        # )
         fea_16 = fea_16 * 0.5 + add_n * 0.5
         e_features[4] = fea_16
 
@@ -1851,7 +1734,7 @@ class MappingNet(torch.nn.Module):
         return x
 
 # ----------------------------------------------------------------------------
-def conv2d_resample(x, w, f, up=1, down=1, padding=0):
+def conv2d_resample(x, w, f, up:int=1, down:int=1, padding:int=0):
     r"""2D convolution with optional up/downsampling."""
     # x.size() -- [1, 4, 512, 512]
     # w.size() -- [180, 4, 3, 3]
@@ -1965,14 +1848,17 @@ def setup_filter(f):
 
 
 # ----------------------------------------------------------------------------
-def upfirdn2d(x, f, up=1, down=1, padding=[0, 0, 0, 0], gain=1.0):
+def upfirdn2d(x, f, up:int =1, down:int =1, padding=[0, 0, 0, 0], gain: float=1.0):
     r"""Pad, upsample, filter, and downsample a batch of 2D images."""
 
-    batch_size, num_channels, in_height, in_width = x.size()
-    padx0, padx1, pady0, pady1 = padding
+    # batch_size, num_channels, in_height, in_width = x.size()
+    num_channels = x.size(1)
+
+    # padx0, padx1, pady0, pady1 = padding
 
     # Upsample by inserting zeros.
-    x = F.pad(x, [padx0, padx1, pady0, pady1])
+    # x = F.pad(x, [padx0, padx1, pady0, pady1])
+    x = F.pad(x, padding)
 
     # Setup filter.
     f = f * (gain ** (f.ndim / 2))
