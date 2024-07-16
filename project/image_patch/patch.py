@@ -271,7 +271,7 @@ class SwinTransBlock(nn.Module):
 
         return attn_mask
 
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
+    def forward(self, x, x_size: Tuple[int, int], mask):
         # H, W = self.input_resolution
         H, W = x_size
         B, L, C = x.shape
@@ -281,7 +281,7 @@ class SwinTransBlock(nn.Module):
         if mask is not None:
             mask = mask.view(B, H, W, 1)
         else:
-            # ==> pdb.set_trace()
+            pdb.set_trace()
             pass
 
         # no cyclic shift
@@ -289,7 +289,7 @@ class SwinTransBlock(nn.Module):
         if mask is not None:
             shifted_mask = mask
         else:
-            # ==> pdb.set_trace()
+            pdb.set_trace()
             pass
 
         # partition windows
@@ -305,7 +305,7 @@ class SwinTransBlock(nn.Module):
             mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
         else:
             mask_windows = None
-            # ==> pdb.set_trace()
+            pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
@@ -319,7 +319,7 @@ class SwinTransBlock(nn.Module):
             mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
             shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
         else:
-            # pdb.set_trace()
+            pdb.set_trace()
             pass
 
         # no cyclic shift
@@ -327,14 +327,14 @@ class SwinTransBlock(nn.Module):
         if mask is not None:
             mask = shifted_mask
         else:
-            # ==> pdb.set_trace()
+            pdb.set_trace()
             pass
 
         x = x.view(B, H * W, C)
         if mask is not None:
             mask = mask.view(B, H * W, 1)
         else:
-            # ==> pdb.set_trace()
+            pdb.set_trace()
             pass
 
         # FFN
@@ -720,6 +720,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
             x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
         )
         if mask is not None:
+            pdb.set_trace()
             shifted_mask = torch.roll(
                 mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
             )
