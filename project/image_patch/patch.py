@@ -318,7 +318,7 @@ class SwinTransBlock(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def forward(self, x, mask):
+    def forward(self, x, mask) -> List[torch.Tensor]:
         H, W = self.input_resolution
         B, L, C = x.shape
 
@@ -402,7 +402,7 @@ class SwinTransBlockNone(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def forward(self, x, mask: Optional[torch.Tensor]=None) -> List[Optional[torch.Tensor]]:
+    def forward(self, x, mask: Optional[torch.Tensor]) -> List[Optional[torch.Tensor]]:
         # H, W = self.input_resolution
         H, W = self.input_resolution
         B, L, C = x.shape
@@ -471,7 +471,7 @@ class SwinTransBlockWithShift(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def forward(self, x, mask):
+    def forward(self, x, mask)->List[torch.Tensor]:
         H, W = self.input_resolution
         B, L, C = x.shape
 
@@ -550,7 +550,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def forward(self, x, mask:Optional[torch.Tensor]=None)->List[Optional[torch.Tensor]]:
+    def forward(self, x, mask:Optional[torch.Tensor])->List[Optional[torch.Tensor]]:
         H, W = self.input_resolution
         B, L, C = x.shape
 
@@ -602,7 +602,7 @@ class PatchMerging(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size: List[int], mask):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]):
         x = token2feature(x, x_size)
         mask = token2feature(mask, x_size)
 
@@ -612,7 +612,7 @@ class PatchMerging(nn.Module):
         x = feature2token(x)
         mask = feature2token(mask)
 
-        return x, x_size, mask
+        return x, x_size, mask # xxxx_debug
 
     def __repr__(self):
         s = f"PatchMerging(in_channels={self.in_channels}, out_channels={self.out_channels}, down={self.down})"
@@ -634,12 +634,12 @@ class PatchMergingNone(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]):
         x = token2feature(x, x_size)
         x = self.conv(x)
         x_size = (x_size[0]//2, x_size[1]//2)
         x = feature2token(x)
-        return x, x_size, mask
+        return x, x_size, mask  # xxxx_debug
 
     def __repr__(self):
         s = f"PatchMergingNone(in_channels={self.in_channels}, out_channels={self.out_channels}, down={self.down})"
@@ -650,13 +650,13 @@ class PatchIdentity(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, x_size: List[int], mask):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]):
         # tensor [x] size: [1, 4096, 180], min: -57.892014, max: 180.068939, mean: 1.617837
         # x_size is tuple: len = 2
         #     [item] value: '64'
         #     [item] value: '64'
         # tensor [mask] size: [1, 4096, 1], min: 0.0, max: 1.0, mean: 0.945557
-        return x, x_size, mask
+        return x, x_size, mask  # xxxx_debug
 
 class PatchUpsamplingNone(nn.Module):
     """ mask === None """
@@ -673,12 +673,12 @@ class PatchUpsamplingNone(nn.Module):
             up=up,
         )
 
-    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None)->List[Optional[torch.Tensor]]:
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor])->List[Optional[torch.Tensor]]:
         x = token2feature(x, x_size)
         x = self.conv(x)
         x_size = (x_size[0] * self.up, x_size[1] * self.up)
         x = feature2token(x)
-        return x, x_size, mask
+        return x, x_size, mask  # xxxx_debug
 
     def __repr__(self):
         s = f"PatchUpsamplingNone(in_channels={self.in_channels}, out_channels={self.out_channels}, up={self.up})"
@@ -723,7 +723,7 @@ class BasicLayer(nn.Module):
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
 
-    def forward(self, x, x_size: List[int], mask):
+    def forward(self, x, x_size: List[int], mask: Optional[torch.Tensor]):
         x, x_size, mask = self.downsample(x, x_size, mask)
 
         identity = x
@@ -735,7 +735,7 @@ class BasicLayer(nn.Module):
         x = feature2token(x) + identity
         mask = feature2token(mask)
 
-        return x, x_size, mask
+        return x, x_size, mask  # xxxx_debug
 
 class BasicLayerNone(nn.Module):
     """A basic Swin Transformer layer for one stage -- mask == None."""
@@ -775,7 +775,7 @@ class BasicLayerNone(nn.Module):
 
         self.conv = Conv2dLayerPartialNone(in_channels=dim, out_channels=dim, kernel_size=3)
 
-    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]):
         # print(f"BasicLayerNone x_size: {x_size}, input_resolution={self.input_resolution}")
 
         x, x_size, mask = self.downsample(x, x_size, mask)
@@ -787,7 +787,7 @@ class BasicLayerNone(nn.Module):
         x = self.conv(token2feature(x, x_size))
         x = feature2token(x) + identity            
 
-        return x, x_size, mask
+        return x, x_size, mask  # xxxx_debug
 
 # ----------------------------------------------------------------------------
 class EncFromRGB(nn.Module):
@@ -1300,10 +1300,6 @@ class Generator(nn.Module):
         z = torch.randn(1, self.z_dim).to(x.device)
         input_image = (input_image - 0.5) * 2.0
 
-        # todos.debug.output_var("input_image", input_image)
-        # todos.debug.output_var("input_mask", input_mask)
-        # todos.debug.output_var("z", z)
-
         ws = self.mapping(z)
 
         # todos.debug.output_var("ws", ws)
@@ -1719,4 +1715,3 @@ def bias_lrelu(x, b, dim:int=1):
     x = F.leaky_relu(x, 0.2) * 1.414213
 
     return x
-
