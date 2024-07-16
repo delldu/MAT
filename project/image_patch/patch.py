@@ -7,7 +7,7 @@ import numpy as np
 from timm.models.layers import to_2tuple
 
 # ----------------------------------------------------------------------------
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 import todos
 
 import pdb
@@ -47,7 +47,7 @@ def window_reverse(windows, window_size: int, H: int, W: int):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
-def window_calculate_mask(x_size: Tuple[int, int], shift_size:int, window_size:int):
+def window_calculate_mask(x_size: List[int], shift_size:int, window_size:int):
     # calculate attention mask for SW-MSA
     H, W = x_size
     img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
@@ -61,18 +61,30 @@ def window_calculate_mask(x_size: Tuple[int, int], shift_size:int, window_size:i
         slice(-window_size, -shift_size),
         slice(-shift_size, None),
     )
+
     cnt = 0
     for h in h_slices:
         for w in w_slices:
             img_mask[:, h, w, :] = cnt
             cnt += 1
 
-    mask_windows = window_partition(
-        img_mask, window_size
-    )  # nW, window_size, window_size, 1
+    mask_windows = window_partition(img_mask, window_size)
     mask_windows = mask_windows.view(-1, window_size * window_size)
+
     attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
     attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
+
+    # tensor [mask_windows] size: [64, 64], min: 8.0, max: 8.0, mean: 8.0
+    # tensor [attn_mask] size: [64, 64, 64], min: 0.0, max: 0.0, mean: 0.0
+    # -------------------------------------------------------------------
+    # tensor [mask_windows] size: [64, 64], min: 0.0, max: 8.0, mean: 0.75
+    # tensor [attn_mask] size: [64, 64, 64], min: -100.0, max: 0.0, mean: -12.109375
+    # -------------------------------------------------------------------
+    # tensor [mask_windows] size: [4, 256], min: 8.0, max: 8.0, mean: 8.0
+    # tensor [attn_mask] size: [4, 256, 256], min: 0.0, max: 0.0, mean: 0.0
+    # -------------------------------------------------------------------
+    # tensor [mask_windows] size: [4, 256], min: 0.0, max: 8.0, mean: 3.0
+    # tensor [attn_mask] size: [4, 256, 256], min: -100.0, max: 0.0, mean: -43.75
 
     return attn_mask
 
@@ -297,6 +309,8 @@ class SwinTransBlock(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
+        self.attn_mask = window_calculate_mask(self.input_resolution, self.shift_size, self.window_size)
+
         # assert (self.shift_size == 0)
 
         # shift_size = 0, window_size=8
@@ -304,35 +318,27 @@ class SwinTransBlock(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size: Tuple[int, int]):
-        return window_calculate_mask(x_size, self.shift_size, self.window_size)
-
-    def forward(self, x, x_size: Tuple[int, int], mask):
-        # H, W = self.input_resolution
-        H, W = x_size
+    def forward(self, x, mask):
+        H, W = self.input_resolution
         B, L, C = x.shape
 
         shortcut = x
         x = x.view(B, H, W, C)
         mask = mask.view(B, H, W, 1)
 
-        # no cyclic shift
+        # Cyclic shift
         shifted_x = x
         shifted_mask = mask
 
         # partition windows
-        x_windows = window_partition(
-            shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
+        x_windows = window_partition(shifted_x, self.window_size)
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)
         mask_windows = window_partition(shifted_mask, self.window_size)
         mask_windows = mask_windows.view(-1, self.window_size * self.window_size, 1)
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
+            x_windows, mask=self.attn_mask.to(x.device), mask_windows=mask_windows
         )
 
         # merge windows
@@ -341,7 +347,7 @@ class SwinTransBlock(nn.Module):
         mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
         shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
 
-        # no cyclic shift
+        # Cyclic shift
         x = shifted_x
         mask = shifted_mask
 
@@ -377,7 +383,6 @@ class SwinTransBlockNone(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         if min(self.input_resolution) <= self.window_size:
-            # ==> pdb.set_trace()
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
@@ -388,6 +393,8 @@ class SwinTransBlockNone(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
+        self.attn_mask = window_calculate_mask(self.input_resolution, self.shift_size, self.window_size)
+
         # assert (self.shift_size == 0)
 
         # shift_size = 0, window_size=8
@@ -395,12 +402,9 @@ class SwinTransBlockNone(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size: Tuple[int, int]):
-        return window_calculate_mask(x_size, self.shift_size, self.window_size)
-
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
+    def forward(self, x, mask: Optional[torch.Tensor]=None) -> List[Optional[torch.Tensor]]:
         # H, W = self.input_resolution
-        H, W = x_size
+        H, W = self.input_resolution
         B, L, C = x.shape
 
         shortcut = x
@@ -410,23 +414,17 @@ class SwinTransBlockNone(nn.Module):
         shifted_x = x
 
         # partition windows
-        x_windows = window_partition(
-            shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
-        mask_windows = None
-        # ==> pdb.set_trace()
+        x_windows = window_partition(shifted_x, self.window_size)
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
+        attn_windows = self.attn(x_windows, mask=self.attn_mask.to(x.device))
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
 
-        # no cyclic shift
+        # Cyclic shift
         x = shifted_x
         x = x.view(B, H * W, C)
 
@@ -464,6 +462,8 @@ class SwinTransBlockWithShift(nn.Module):
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
 
+        self.attn_mask = window_calculate_mask(self.input_resolution, self.shift_size, self.window_size)
+
         # assert (self.shift_size > 0)
 
         # shift_size = 0, window_size=8
@@ -471,25 +471,17 @@ class SwinTransBlockWithShift(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size: Tuple[int, int]):
-        return window_calculate_mask(x_size, self.shift_size, self.window_size)
-
-    def forward(self, x, x_size: Tuple[int, int], mask):
-        # H, W = self.input_resolution
-        H, W = x_size
+    def forward(self, x, mask):
+        H, W = self.input_resolution
         B, L, C = x.shape
 
         shortcut = x
         x = x.view(B, H, W, C)
         mask = mask.view(B, H, W, 1)
 
-        # cyclic shift
-        shifted_x = torch.roll(
-            x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-        )
-        shifted_mask = torch.roll(
-            mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-        )
+        # Cyclic shift
+        shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+        shifted_mask = torch.roll(mask, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
 
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
@@ -499,7 +491,7 @@ class SwinTransBlockWithShift(nn.Module):
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
         attn_windows, mask_windows = self.attn(
-            x_windows, mask=self.calculate_mask(x_size).to(x.device), mask_windows=mask_windows
+            x_windows, mask=self.attn_mask.to(x.device), mask_windows=mask_windows
         )
 
         # merge windows
@@ -508,10 +500,8 @@ class SwinTransBlockWithShift(nn.Module):
         mask_windows = mask_windows.view(-1, self.window_size, self.window_size, 1)
         shifted_mask = window_reverse(mask_windows, self.window_size, H, W)
 
-        # reverse cyclic shift
-        x = torch.roll(
-            shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-        )
+        # Reverse cyclic shift
+        x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         mask = torch.roll(shifted_mask, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
 
         x = x.view(B, H * W, C)
@@ -551,6 +541,7 @@ class SwinTransBlockWithShiftNone(nn.Module):
         self.attn = WindowAttentionNone(dim, window_size=to_2tuple(self.window_size), num_heads=num_heads)
         self.fuse = LReLuFC(in_features=dim * 2, out_features=dim)
         self.mlp = MLP(in_features=dim, hidden_features=dim * 2)
+        self.attn_mask = window_calculate_mask(self.input_resolution, self.shift_size, self.window_size)
 
         # assert (self.shift_size > 0)
 
@@ -559,39 +550,29 @@ class SwinTransBlockWithShiftNone(nn.Module):
         # shift_size = 0, window_size=16
         # shift_size = 8, window_size=16
 
-    def calculate_mask(self, x_size: Tuple[int, int]):
-        return window_calculate_mask(x_size, self.shift_size, self.window_size)
-
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
-        # H, W = self.input_resolution
-        H, W = x_size
+    def forward(self, x, mask:Optional[torch.Tensor]=None)->List[Optional[torch.Tensor]]:
+        H, W = self.input_resolution
         B, L, C = x.shape
 
         shortcut = x
         x = x.view(B, H, W, C)
 
-        # cyclic shift
-        shifted_x = torch.roll(
-            x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-        )
+        # Cyclic shift
+        shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
 
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-        mask_windows = None
-        # ==> pdb.set_trace()
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
+        attn_windows = self.attn(x_windows, mask=self.attn_mask.to(x.device))
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
 
-        # reverse cyclic shift
-        x = torch.roll(
-            shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-        )
+        # Reverse cyclic shift
+        x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
 
         x = x.view(B, H * W, C)
 
@@ -621,13 +602,11 @@ class PatchMerging(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size: Tuple[int, int], mask):
+    def forward(self, x, x_size: List[int], mask):
         x = token2feature(x, x_size)
         mask = token2feature(mask, x_size)
 
         x, mask = self.conv(x, mask)
-        # ratio = 1 / self.down  # self.down === 2
-        # x_size = (int(x_size[0] * ratio), int(x_size[1] * ratio))
         x_size = (x_size[0]//2, x_size[1]//2)
 
         x = feature2token(x)
@@ -655,7 +634,7 @@ class PatchMergingNone(nn.Module):
             down=down,
         )
 
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None):
         x = token2feature(x, x_size)
         x = self.conv(x)
         x_size = (x_size[0]//2, x_size[1]//2)
@@ -671,7 +650,7 @@ class PatchIdentity(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, x_size: Tuple[int, int], mask):
+    def forward(self, x, x_size: List[int], mask):
         # tensor [x] size: [1, 4096, 180], min: -57.892014, max: 180.068939, mean: 1.617837
         # x_size is tuple: len = 2
         #     [item] value: '64'
@@ -694,7 +673,7 @@ class PatchUpsamplingNone(nn.Module):
             up=up,
         )
 
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None)->List[Optional[torch.Tensor]]:
         x = token2feature(x, x_size)
         x = self.conv(x)
         x_size = (x_size[0] * self.up, x_size[1] * self.up)
@@ -744,12 +723,12 @@ class BasicLayer(nn.Module):
 
         self.conv = Conv2dLayerPartial(in_channels=dim, out_channels=dim, kernel_size=3)
 
-    def forward(self, x, x_size: Tuple[int, int], mask):
+    def forward(self, x, x_size: List[int], mask):
         x, x_size, mask = self.downsample(x, x_size, mask)
 
         identity = x
         for blk in self.blocks:
-            x, mask = blk(x, x_size, mask)
+            x, mask = blk(x, mask) # blk -- SwinTransBlock, SwinTransBlockNone
 
         mask = token2feature(mask, x_size)
         x, mask = self.conv(token2feature(x, x_size), mask)
@@ -760,7 +739,6 @@ class BasicLayer(nn.Module):
 
 class BasicLayerNone(nn.Module):
     """A basic Swin Transformer layer for one stage -- mask == None."""
-
     def __init__(
         self, dim, input_resolution, depth, num_heads, window_size, downsample, mask_none
     ):
@@ -797,14 +775,14 @@ class BasicLayerNone(nn.Module):
 
         self.conv = Conv2dLayerPartialNone(in_channels=dim, out_channels=dim, kernel_size=3)
 
-        # pdb.set_trace()
+    def forward(self, x, x_size: List[int], mask:Optional[torch.Tensor]=None):
+        # print(f"BasicLayerNone x_size: {x_size}, input_resolution={self.input_resolution}")
 
-    def forward(self, x, x_size: Tuple[int, int], mask=None):
         x, x_size, mask = self.downsample(x, x_size, mask)
 
         identity = x
         for blk in self.blocks:
-            x, mask = blk(x, x_size, mask)
+            x, mask = blk(x, mask) # blk -- SwinTransBlockNone, SwinTransBlockWithShiftNone
 
         x = self.conv(token2feature(x, x_size))
         x = feature2token(x) + identity            
@@ -829,14 +807,11 @@ class EncFromRGB(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         x = self.conv1(x)
-
         return x
-
 
 class ConvBlockDown(nn.Module):
     def __init__(self, in_channels, out_channels):  # res = 2, ..., resolution_log
         super().__init__()
-
         self.conv0 = Conv2dLayer(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -856,7 +831,7 @@ class ConvBlockDown(nn.Module):
         return x
 
 
-def token2feature(x, x_size: Tuple[int, int]):
+def token2feature(x, x_size: List[int]):
     B, N, C = x.shape
     h, w = x_size
     x = x.permute(0, 2, 1).reshape(B, C, h, w)
@@ -990,13 +965,11 @@ class DecBlockFirst(nn.Module):
         # tensor [img] size: [1, 3, 16, 16], min: -0.003557, max: 0.002705, mean: -0.000736
         return x, img
 
-
 # ----------------------------------------------------------------------------
 class DecBlock(nn.Module):
-    def __init__(
-        self, res, in_channels, out_channels, style_dim, img_channels
-    ):  # res = 4, ..., resolution_log2
+    def __init__(self, res, in_channels, out_channels, style_dim, img_channels):
         super().__init__()
+        # res = 4, ..., resolution_log2
         self.res = res
         self.conv0 = StyleConvWithNoise(
             in_channels=in_channels,
@@ -1021,7 +994,7 @@ class DecBlock(nn.Module):
             style_dim=style_dim,
         )
 
-    def forward(self, x, img, ws, gs, e_features):
+    def forward(self, x, img, ws, gs, e_features)->List[torch.Tensor]:
         style = get_style_code(ws[:, self.res * 2 - 9], gs)
         x = self.conv0(x, style)
         x = x + e_features[self.res]
@@ -1035,23 +1008,14 @@ class DecBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(
-        self,
-        res_log2=9,
-        # activation='lrelu',
-        style_dim=1536,
-        img_channels=3,
-    ):
+    def __init__(self, res_log2=9, style_dim=1536, img_channels=3):
         super().__init__()
         self.Dec_16x16 = DecBlockFirst(4, nf(4), nf(4), style_dim, img_channels)
         for res in range(5, res_log2 + 1):
-            setattr(
-                self,
-                "Dec_%dx%d" % (2**res, 2**res),
+            setattr(self, "Dec_%dx%d" % (2**res, 2**res),
                 DecBlock(res, nf(res - 1), nf(res), style_dim, img_channels),
             )
         self.res_log2 = res_log2  # 9
-
 
     def forward(self, x, ws, gs, e_features):
         x, img = self.Dec_16x16(x, ws, gs, e_features)
@@ -1068,14 +1032,7 @@ class Decoder(nn.Module):
 
 
 class StyleConv(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        style_dim,  # Intermediate latent (W) dimensionality.
-        kernel_size=3,  # Convolution kernel size.
-        up=1,  # Integer upsampling factor.
-    ):
+    def __init__(self, in_channels, out_channels, style_dim, kernel_size=3, up=1):
         super().__init__()
         self.out_channels = out_channels
         self.conv = ModulatedConv2dD(
@@ -1090,7 +1047,7 @@ class StyleConv(torch.nn.Module):
     def forward(self, x, style):
         x = self.conv(x, style)
         x = x + self.bias.reshape([1, self.out_channels, 1, 1])
-        return F.leaky_relu(x, 0.2) * 1.4142135623730951
+        return F.leaky_relu(x, 0.2) * 1.414213
 
 
 class DecStyleBlock(nn.Module):
@@ -1118,8 +1075,7 @@ class DecStyleBlock(nn.Module):
             style_dim=style_dim,
         )
 
-
-    def forward(self, x, img, style, skip):
+    def forward(self, x, img, style, skip)->List[torch.Tensor]:
         x = self.conv0(x, style)
         x = x + skip
         x = self.conv1(x, style)
@@ -1127,15 +1083,8 @@ class DecStyleBlock(nn.Module):
 
         return x, img
 
-# xxxx_1111
 class FirstStage(nn.Module):
-    def __init__(
-        self,
-        img_channels=3,
-        img_resolution=512,
-        dim=180,
-        w_dim=512,
-    ):
+    def __init__(self, img_channels=3, img_resolution=512, dim=180, w_dim=512):
         super().__init__()
         res = 64
 
@@ -1240,6 +1189,8 @@ class FirstStage(nn.Module):
         mask = feature2token(mask)
         mid = len(self.tran) // 2  # len(self.tran) == 5 ==> mid === 2
 
+        # for layer in my_seq[0:3]:
+        #   x = layer.forward(x)
         for i, block in enumerate(self.tran):  # 64 to 16
             if i < mid:  # ==> i = 0, 1 # xxxx_debug
                 x, x_size, mask = block(x, x_size, mask)
@@ -1251,6 +1202,7 @@ class FirstStage(nn.Module):
                 # tensor [x] size: [1, 1024, 180], min: -119.121346, max: 524.88324, mean: 1.946196
                 # x_size --- [32, 32]
                 x, x_size, mask = block(x, x_size, None) ### PatchMergingNone
+
                 ws = self.ws_style(ws[:, -1])
                 add_n = self.to_square(ws).view(1, 256, 1)
                 x = x * 0.5 + add_n * 0.5 # x.size() -- [1, 256, 180]
@@ -1275,12 +1227,7 @@ class FirstStage(nn.Module):
 
 
 class SynthesisNet(nn.Module):
-    def __init__(
-        self,
-        w_dim=512,  # Intermediate latent (W) dimensionality.
-        img_resolution=512,  # Output image resolution.
-        img_channels=3,  # Number of color channels.
-    ):
+    def __init__(self, w_dim=512, img_resolution=512, img_channels=3):
         super().__init__()
         resolution_log2 = int(np.log2(img_resolution))  # ==> 9
 
@@ -1302,8 +1249,6 @@ class SynthesisNet(nn.Module):
 
     def forward(self, input_image, input_mask, ws):
         out_stg1 = self.first_stage(input_image, input_mask, ws)
-
-        # return out_stg1 # xxxx_1111
 
         # encoder
         x = input_image * input_mask + out_stg1 * (1 - input_mask)
@@ -1335,14 +1280,7 @@ class SynthesisNet(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(
-        self,
-        z_dim=512,  # Input latent (Z) dimensionality, 0 = no latent.
-        c_dim=0,  # Conditioning label (C) dimensionality, 0 = no label.
-        w_dim=512,  # Intermediate latent (W) dimensionality.
-        img_resolution=512,  # resolution of generated image
-        img_channels=3,  # Number of input color channels.
-    ):
+    def __init__(self, z_dim=512, c_dim=0, w_dim=512, img_resolution=512, img_channels=3):
         super().__init__()
         self.MAX_H = 512
         self.MAX_W = 512
@@ -1387,11 +1325,7 @@ def normalize_2nd_moment(x, dim=1, eps=1e-8):
 
 # ----------------------------------------------------------------------------
 class MappingFC(nn.Module):
-    def __init__(
-        self,
-        in_features=180,  # Number of input features.
-        out_features=180,  # Number of output features.
-    ):
+    def __init__(self, in_features=180, out_features=180):
         super().__init__()
         bias_init = 0  # Initial value for the additive bias.
         self.in_features = in_features
@@ -1411,7 +1345,7 @@ class MappingFC(nn.Module):
         x = x.matmul(w.t())
 
         out = x + b.reshape([1, self.out_features])
-        out = F.leaky_relu(out, 0.2) * 1.4142135623730951
+        out = F.leaky_relu(out, 0.2) * 1.414213
 
         return out
 
@@ -1421,12 +1355,7 @@ class MappingFC(nn.Module):
 
 
 class LinearFC(nn.Module):
-    def __init__(
-        self,
-        in_features=180,  # Number of input features.
-        out_features=180,  # Number of output features.
-        bias_init=0,  # Initial value for the additive bias.
-    ):
+    def __init__(self, in_features=180, out_features=180, bias_init=0):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -1449,12 +1378,7 @@ class LinearFC(nn.Module):
         return s
 
 class LReLuFC(nn.Module):
-    def __init__(
-        self,
-        in_features=180,  # Number of input features.
-        out_features=180,  # Number of output features.
-        bias_init=0,  # Initial value for the additive bias.
-    ):
+    def __init__(self, in_features=180, out_features=180, bias_init=0):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -1479,14 +1403,7 @@ class LReLuFC(nn.Module):
         return s
 
 class Conv2dLayer(nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        kernel_size,  # Width and height of the convolution kernel.
-        up=1,  # Integer upsampling factor.
-        down=1,  # Integer downsampling factor.
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size, up=1, down=1):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -1509,16 +1426,13 @@ class Conv2dLayer(nn.Module):
     def forward(self, x):
         w = self.weight * self.weight_gain
         # todos.debug.output_var("x1", x)
-        x = conv2d_resample(
-            x=x,
-            w=w,
-            f=self.resample_filter,
+        x = conv2d_resample(x, w, self.resample_filter,
             up=self.up, # === 1
             down=self.down, # 2 | 1
             padding=self.padding,
         )
         x = x + self.bias.reshape([1, self.out_channels, 1, 1])
-        return F.leaky_relu(x, 0.2) * 1.4142135623730951
+        return F.leaky_relu(x, 0.2) * 1.414213
 
     def __repr__(self):
         s = f"Conv2dLayer(in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size}, up={self.up}, down={self.down}"
@@ -1526,13 +1440,7 @@ class Conv2dLayer(nn.Module):
 
 
 class ModulatedConv2d(nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        kernel_size,  # Width and height of the convolution kernel.
-        style_dim,  # dimension of the style code
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size, style_dim):
         super().__init__()
         self.weight = nn.Parameter(
             torch.randn([1, out_channels, in_channels, kernel_size, kernel_size])
@@ -1560,15 +1468,7 @@ class ModulatedConv2d(nn.Module):
 
 
 class ModulatedConv2dD(nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        kernel_size,  # Width and height of the convolution kernel.
-        style_dim,  # dimension of the style code
-        up=1,  # Integer upsampling factor.
-        down=1,  # Integer downsampling factor.
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size, style_dim, up=1, down=1):
         super().__init__()
 
         self.weight = nn.Parameter(
@@ -1599,10 +1499,7 @@ class ModulatedConv2dD(nn.Module):
             batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
         x = x.view(1, batch * in_channels, height, width)
-        x = conv2d_resample(
-            x=x,
-            w=weight,
-            f=self.resample_filter,
+        x = conv2d_resample(x, weight, self.resample_filter,
             up=self.up, # 1 | 2
             down=self.down, # === 1
             padding=self.padding,
@@ -1613,15 +1510,7 @@ class ModulatedConv2dD(nn.Module):
 
 
 class StyleConvWithNoise(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels,  # Number of input channels.
-        out_channels,  # Number of output channels.
-        style_dim,  # Intermediate latent (W) dimensionality.
-        resolution=16,  # Resolution of this layer.
-        kernel_size=3,  # Convolution kernel size.
-        up=1,  # Integer upsampling factor.
-    ):
+    def __init__(self, in_channels, out_channels, style_dim, resolution=16, kernel_size=3, up=1):
         super().__init__()
         self.out_channels = out_channels
 
@@ -1643,17 +1532,11 @@ class StyleConvWithNoise(torch.nn.Module):
         noise = self.noise_const * self.noise_strength
         x = x + noise
         x = x + self.bias.reshape([1, self.out_channels, 1, 1])
-        return F.leaky_relu(x, 0.2) * 1.4142135623730951
+        return F.leaky_relu(x, 0.2) * 1.414213
 
 
 class ToRGB(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        style_dim,
-        kernel_size=1,
-    ):
+    def __init__(self, in_channels, out_channels, style_dim, kernel_size=1):
         super().__init__()
 
         self.out_channels = out_channels
@@ -1684,15 +1567,7 @@ def get_style_code(a, b):
 
 
 class MappingNet(torch.nn.Module):
-    def __init__(
-        self,
-        z_dim=512,  # Input latent (Z) dimensionality
-        c_dim=0,  # Conditioning label (C) dimensionality, 0 = no label.
-        w_dim=512,  # Intermediate latent (W) dimensionality.
-        num_ws=12,  # Number of intermediate latents to output
-        num_layers=8,  # Number of mapping layers.
-        layer_features=512,  # Number of intermediate features in the mapping layers
-    ):
+    def __init__(self, z_dim=512, c_dim=0, w_dim=512, num_ws=12, num_layers=8, layer_features=512):
         super().__init__()
         self.num_ws = num_ws
         self.num_layers = num_layers
@@ -1744,28 +1619,13 @@ def conv2d_resample(x, w, f, up:int=1, down:int=1, padding:int=0):
     # up = 1, down = 2, padding = 1
     # up = 2, down = 1, padding = 1
     # up = 1, down = 1, padding = 0
-    # print(f"  conv2d_resample up={up}, down={down}")
-    # todos.debug.output_var("w", w)
 
     # d2u1, ddu2, d1u1
     out_channels, in_channels_per_group, kh, kw = w.size()  # [180, 4, 3, 3] ?
-    fw, fh = 4, 4 # f.size()
+    fw, fh = f.size()
     # fw === 4, fh === 4
 
     px0, px1, py0, py1 = padding, padding, padding, padding
-
-    # Adjust padding to account for up/downsampling.
-    # if up > 1:
-    #     # up == 2 ==> pdb.set_trace()
-    #     px0 += (fw + up - 1) // 2
-    #     px1 += (fw - up) // 2
-    #     py0 += (fh + up - 1) // 2
-    #     py1 += (fh - up) // 2
-    # if down > 1:
-    #     px0 += (fw - down + 1) // 2
-    #     px1 += (fw - down) // 2
-    #     py0 += (fh - down + 1) // 2
-    #     py1 += (fh - down) // 2
 
     # Fast path: downsampling only => use strided convolution.
     if down > 1 and up == 1: # d2u1
@@ -1774,28 +1634,26 @@ def conv2d_resample(x, w, f, up:int=1, down:int=1, padding:int=0):
         py0 += (fh - down + 1) // 2
         py1 += (fh - down) // 2
 
-        # => pdb.set_trace(), [px0, px1, py0, py1] -- [2, 2, 2, 2]
-        x = upfirdn2d(x=x, f=f, padding=[px0, px1, py0, py1]) # up=1, down=1
+        # [px0, px1, py0, py1] -- [2, 2, 2, 2]
+        x = upfirdn2d(x, f, padding=[px0, px1, py0, py1]) # up=1, down=1
         x = F.conv2d(x, w, stride=down, groups=1, padding=0)
 
         return x
 
     # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
     if up == 1 and down == 1: #d1u1
-        # if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
-        #     # ==> pdb.set_trace(), [py0, px0] -- [1, 1]
+        # [py0, px0] -- [1, 1]
         return F.conv2d(x, w, stride=1, padding=[py0, px0], groups=1)
-
 
     # Fast path: upsampling with optional downsampling => use transpose strided convolution.
     if up > 1: #ddu2
-        # up == 2 ==> pdb.set_trace()
+        # up == 2
         px0 += (fw + up - 1) // 2
         px1 += (fw - up) // 2
         py0 += (fh + up - 1) // 2
         py1 += (fh - up) // 2
 
-        # ==> pdb.set_trace(), up, down -- (2, 1)
+        # down -- 2 | 1
         w = w.transpose(0, 1)
 
         px0 -= kw - 1
@@ -1803,40 +1661,19 @@ def conv2d_resample(x, w, f, up:int=1, down:int=1, padding:int=0):
         py0 -= kh - 1
         py1 -= kh - up
 
-        # print("conv2d_resample --- ", px0, px1, py0, py1) # 1 1 1 1
-        # pxt = max(min(-px0, -px1), 0)
-        # pyt = max(min(-py0, -py1), 0)
         pxt = 0
         pyt = 0
 
         w = w.flip([2, 3])
         x = F.conv_transpose2d(x, w, stride=up, padding=[pyt, pxt], groups=1)
 
-        x = upfirdn2d(x=x, f=f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2)
+        x = upfirdn2d(x, f, padding=[px0 + pxt, px1 + pxt, py0 + pyt, py1 + pyt], gain=up**2)
         # if down > 1:
         #     pdb.set_trace()
         #     x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
         return x
 
-    # # Fast path: no up/downsampling, padding supported by the underlying implementation => use plain conv2d.
-    # if up == 1 and down == 1: #d1u1
-    #     if px0 == px1 and py0 == py1 and px0 >= 0 and py0 >= 0:
-    #         # ==> pdb.set_trace(), [py0, px0] -- [1, 1]
-    #         return F.conv2d(x, w, stride=1, padding=[py0, px0], groups=1)
-
-    # Fallback: Generic reference implementation.
-    # pdb.set_trace()
-    # x = upfirdn2d(
-    #     x=x,
-    #     f=(f if up > 1 else None),
-    #     up=up,
-    #     padding=[px0, px1, py0, py1],
-    #     gain=up**2,
-    # )
-    # x = F.conv2d(x, w, stride=1, padding=0, groups=1)
-
-    # if down > 1:
-    #     x = upfirdn2d(x=x, f=f, down=[down, down, down, down])
+    assert False, "Only support d2u1, ddu2, d1u1 !!!"
     return x
 
 
@@ -1848,16 +1685,14 @@ def setup_filter(f):
 
 
 # ----------------------------------------------------------------------------
-def upfirdn2d(x, f, up:int =1, down:int =1, padding=[0, 0, 0, 0], gain: float=1.0):
+def upfirdn2d(x, f, padding:List[int], gain: float=1.0):
     r"""Pad, upsample, filter, and downsample a batch of 2D images."""
 
-    # batch_size, num_channels, in_height, in_width = x.size()
-    num_channels = x.size(1)
+    C = x.size(1)
+    # up:int =1
+    down:int =1
 
-    # padx0, padx1, pady0, pady1 = padding
-
-    # Upsample by inserting zeros.
-    # x = F.pad(x, [padx0, padx1, pady0, pady1])
+    # Pad
     x = F.pad(x, padding)
 
     # Setup filter.
@@ -1865,18 +1700,15 @@ def upfirdn2d(x, f, up:int =1, down:int =1, padding=[0, 0, 0, 0], gain: float=1.
     f = f.flip([0, 1]) #list(range(f.ndim)))
 
     # Convolve with the filter.
-    f = f.repeat([num_channels, 1, 1, 1]) # [180, 1, 1, 1]
-    x = F.conv2d(input=x, weight=f, groups=num_channels)
+    f = f.repeat([C, 1, 1, 1]) # [180, 1, 1, 1]
+    x = F.conv2d(input=x, weight=f, groups=C)
     x = x[:, :, ::down, ::down]
 
     return x
 
 
-def bias_lrelu(x, b, dim=1):
+def bias_lrelu(x, b, dim:int=1):
     r"""Fused bias and activation function."""
-
-    # act ----  lrelu, alpha= 0.2 gain= 1.4142135623730951
-    # Add bias.
 
     # print("bias_lrelu", "dim=", dim, [-1 if i == dim else 1 for i in range(x.ndim)])
 
@@ -1884,10 +1716,7 @@ def bias_lrelu(x, b, dim=1):
     # [1, -1], [1, -1, 1, 1], [1, 1, -1],
 
     # Evaluate activation function.
-    # alpha = 0.2
-    x = F.leaky_relu(x, 0.2) * 1.4142135623730951
+    x = F.leaky_relu(x, 0.2) * 1.414213
 
-    # # Scale by gain.
-    # x = x * 1.4142135623730951
     return x
 
